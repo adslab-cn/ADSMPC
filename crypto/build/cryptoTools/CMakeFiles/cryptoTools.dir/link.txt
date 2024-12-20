@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcryptoTools.a CMakeFiles/cryptoTools.dir/cryptoTools/Common/Defines.cpp.o CMakeFiles/cryptoTools.dir/cryptoTools/Common/Log.cpp.o CMakeFiles/cryptoTools.dir/cryptoTools/Crypto/AES.cpp.o CMakeFiles/cryptoTools.dir/cryptoTools/Crypto/PRNG.cpp.o
+/usr/bin/ranlib libcryptoTools.a
