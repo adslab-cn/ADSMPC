@@ -33,6 +33,7 @@ add_library(${PROJECT_NAME}
     src/api/api.cpp
     src/protocol/conv.cpp
     src/primitives/dcf.cpp
+    src/primitives/dpf.cpp
     src/protocol/float.cpp
     src/protocol/mic.cpp
     src/protocol/msnzb.cpp
