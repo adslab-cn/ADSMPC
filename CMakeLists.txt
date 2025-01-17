@@ -50,8 +50,6 @@ PUBLIC
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads FSS cryptoTools SCI-FloatML) # CUDA::cudart
 
 
-# orca-sytorch example
-
 add_executable(CNN 
     tests/CNN.cpp
 )
@@ -62,7 +60,13 @@ add_executable(GCN
 )
 target_link_libraries (GCN ${PROJECT_NAME})
 
-add_executable(test
-    tests/test_dataset.cpp
+add_executable(dcf
+    tests/dcf.cpp
 )
-target_link_libraries (test ${PROJECT_NAME})
+target_link_libraries (dcf ${PROJECT_NAME})
+
+add_executable(dpf
+    tests/dpf.cpp
+)
+target_link_libraries (dpf ${PROJECT_NAME})
+
