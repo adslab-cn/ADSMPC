@@ -53,15 +53,19 @@ make
 **运行**
 
 如果在本机测试，即tests下代码中ip地址设置为127.0.0.1，使用两个terminal模拟两台服务器
-
-Server：
+Dealer：
 ```bash
 ./CNN 1
 ```
 
-Client：
+Server：
 ```bash
 ./CNN 2
+```
+
+Client：
+```bash
+./CNN 3
 ```
 
 **Reference:** 
