@@ -14,7 +14,7 @@ This repository has the following components:
         - aux_parameter
         辅助操作，包括密钥定义等
         - api
-        协议评估以及与neural_networks之间的接口，方便网络对FSS后端进行调用（未来看情况可能会作为公共操作放在外面）
+        协议评估以及与neural_networks之间的接口，方便网络对FSS后端进行调用
     - ASS
     加性秘密分享，待添加
 
