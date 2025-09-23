@@ -458,3 +458,25 @@ struct SlothSignExtendKeyPack {
 //         signCW = 0;
 //     }
 // };
+struct DpfRouteKeyPack {
+    int size;
+    int data_bin;
+    int rank_bin;
+    DPFKeyPack* routing_keys;
+
+    GroupElement* r_shares;
+    GroupElement* s_shares;
+    DpfRouteKeyPack() : size(0), data_bin(0), rank_bin(0), 
+                    routing_keys(nullptr), r_shares(nullptr), s_shares(nullptr) {}
+    // 带参数的构造函数，用于分配内存
+    DpfRouteKeyPack(int s, int d_bin, int r_bin) 
+        : size(s), data_bin(d_bin), rank_bin(r_bin) {
+        routing_keys = new DPFKeyPack[s];
+        // 初始化每个 DPFKeyPack
+        for (int i = 0; i < s; ++i) {
+            new (&routing_keys[i]) DPFKeyPack(r_bin, d_bin);
+        }
+        r_shares = new GroupElement[s];
+        s_shares = new GroupElement[s];
+    }
+};

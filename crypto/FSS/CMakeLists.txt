@@ -56,6 +56,7 @@ add_library(${PROJECT_NAME}
     # protocol/wrap.cpp
     # protocol/taylor.cpp
     # protocol/truncate.cpp
+    protocol/dpfsort.cpp
 )
 
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads cryptoTools bitpack)

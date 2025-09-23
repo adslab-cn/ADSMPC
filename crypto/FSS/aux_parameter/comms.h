@@ -167,6 +167,7 @@ public:
 
     Peer(std::string ip, int port)
     {
+        std::cerr << "get ready for 3" << std::endl;
         keyBuf = new SocketBuf(ip, port, false);
     }
 
@@ -315,6 +316,8 @@ public:
     GroupElement recv_input();
 
     void recv_batched_input(uint64_t *g, int size, int bw);
+
+    void send_dpf_route_key(const DpfRouteKeyPack &k);
 };
 
 Peer* waitForPeer(int port); // 服务器等待客户端连接
@@ -454,4 +457,6 @@ public:
     SlothLRSKeyPack recv_sloth_lrs_key(int bin, int shift);
 
     SlothSignExtendKeyPack recv_sloth_sign_extend_key(int bin, int bout);
+
+    DpfRouteKeyPack recv_dpf_route_key(int size, int data_bin, int rank_bin);
 };

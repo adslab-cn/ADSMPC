@@ -31,8 +31,8 @@ public:
     void initPrngs()
     {
         u64 seedKey = 0xdeadbeefbadc0ffe;
-        for (int i = 0; i < 256; ++i)
-        {
+        std::cerr << "get ready for party"<<FSSConfig::party << std::endl;
+        for(int i = 0; i < 256; ++i) {
             FSSConfig::prngs[i].SetSeed(osuCrypto::toBlock(i, seedKey));
         }
     }
@@ -213,6 +213,40 @@ public:
             else {
                 input_layer(data.data, nullptr, b1, 2);
             }
+        }
+    }
+
+    /**
+     * @brief 对一个原始数组进行秘密分享 (新添加的重载函数)
+     * @param size  数组的大小
+     * @param data  指向要分享的数据的指针
+     * @param owner 指定哪一方持有明文数据 (SERVER=2, CLIENT=3)
+     */
+    void inputA(int32_t size, T* data, int owner = SERVER) {
+        // Dealer 的工作由 input_layer 的内部逻辑处理，
+        // 它会使用 PRNG 模拟生成掩码。
+        // 对于 Dealer 来说，传入的 data 指针实际上是用于接收掩码的，
+        // 但在我们的 DpfRoute 流程中，我们不直接使用 Dealer 端的这个输出。
+        if (FSSConfig::party == DEALER) {
+            input_layer(nullptr, data, size, owner);
+            return;
+        }
+
+        // --- 计算方 (Server/Client) 的逻辑 ---
+        if (FSSConfig::party == owner) {
+            // 秘密的持有者 (比如 Server)
+            // `data` 数组里是明文输入。
+            // 调用 input_layer 后，`data` 将被我自己的秘密份额覆盖，
+            // 同时会计算并发给对方的份额。
+            T* tmp_for_peer_share = new T[size]; // 临时空间
+            input_layer(data, tmp_for_peer_share, size, owner);
+            delete[] tmp_for_peer_share; // 释放临时空间
+        }
+        else { 
+            // 不是秘密的持有者，需要接收份额
+            // `data` 数组是空的，用来接收份额。
+            // 第一个参数是 nullptr 因为没有明文。
+            input_layer(nullptr, data, size, owner);
         }
     }
 

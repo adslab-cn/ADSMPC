@@ -13,12 +13,14 @@ using namespace FSSConfig;
 SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
 {
     this->t = BUF_SOCKET;
+    std::cerr << "[CLIENT] Trying to connect to server at " << ip << ":" << port << " and " << port + 3 << "..." << std::endl;
     std::cerr << "trying to connect with server...";
     {
         struct sockaddr_in addr;
         addr.sin_family = AF_INET; // IPv4地址族 
         addr.sin_port = htons(port); // 端口号转换为网络字节序
         addr.sin_addr.s_addr = inet_addr(ip.c_str()); // 将IP字符串转换为二进制格式
+        std::cerr << "[CLIENT] Attempting to connect recv socket to " << ip << ":" << port << "..." << std::endl;
         while (1)// 无限循环直到连接成功
         {
             recvsocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -29,6 +31,7 @@ SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
             }
             if (connect(recvsocket, (struct sockaddr *)&addr, sizeof(addr)) == 0)
             {
+                std::cerr << "[CLIENT] Recv socket connected to " << ip << ":" << port << "." << std::endl;
                 break;
             }
             ::close(recvsocket);
@@ -45,6 +48,7 @@ SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port + 3); // 发送端口为接收端口+3
         addr.sin_addr.s_addr = inet_addr(ip.c_str());
+        std::cerr << "[CLIENT] Attempting to connect send socket to " << ip << ":" << port + 3 << "..." << std::endl;
         while (1)
         {
             sendsocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -55,6 +59,7 @@ SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
             }
             if (connect(sendsocket, (struct sockaddr *)&addr, sizeof(addr)) == 0)
             {
+                std::cerr << "[CLIENT] Send socket connected to " << ip << ":" << port + 3 << "." << std::endl;
                 break;
             }
             ::close(sendsocket);
@@ -63,7 +68,7 @@ SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
         const int one = 1;
         setsockopt(sendsocket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     }
-    std::cerr << "connected" << std::endl;
+    std::cerr << "[CLIENT] Both sockets connected. Peer established." << std::endl; // 修改原来的 "connected"
 }
 
 
@@ -118,6 +123,7 @@ void Peer::close()
 Peer* waitForPeer(int port)
 {
     int sendsocket, recvsocket;
+    std::cerr << "[SERVER] Starting to wait for client on port " << port << " and " << port + 3 << "..." << std::endl;
     std::cerr << "waiting for connection from client...";
     {
         struct sockaddr_in dest;
@@ -141,7 +147,9 @@ Peer* waitForPeer(int port)
             perror("error: listen");
             exit(1);
         }
+        std::cerr << "[SERVER] Listening on port " << port << " for send socket..." << std::endl;
         sendsocket = accept(mysocket, (struct sockaddr *)&dest, &socksize);
+        std::cerr << "[SERVER] Accepted connection on port " << port << " for send socket." << std::endl;
         const int one = 1;
         setsockopt(sendsocket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         close(mysocket);
@@ -170,13 +178,15 @@ Peer* waitForPeer(int port)
             perror("error: listen");
             exit(1);
         }
+        std::cerr << "[SERVER] Listening on port " << port + 3 << " for recv socket..." << std::endl;
         recvsocket = accept(mysocket, (struct sockaddr *)&dest, &socksize);
+        std::cerr << "[SERVER] Accepted connection on port " << port + 3 << " for recv socket." << std::endl;
         const int one = 1;
         setsockopt(recvsocket, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
         close(mysocket);
     }
 
-    std::cerr << "connected" << std::endl;
+    std::cerr << "[SERVER] Both sockets connected. Peer established." ;
     return new Peer(sendsocket, recvsocket);
 }
 
@@ -1777,4 +1787,115 @@ void Peer::send_sloth_sign_extend_key(const SlothSignExtendKeyPack &kp)
 {
     send_ge(kp.rout, kp.bout);
     send_ge(kp.select, kp.bout);
+}
+
+size_t bw_to_bytes(int bw) {
+    if (bw > 32) return 8;
+    if (bw > 16) return 4;
+    if (bw > 8) return 2;
+    return 1;
+}
+
+size_t get_dpf_key_pack_size_in_bytes(const DPFKeyPack& kp) {
+    return (kp.bin + 1) * sizeof(osuCrypto::block) + 
+           bw_to_bytes(kp.bin) +  // tLcw
+           bw_to_bytes(kp.bin) +  // tRcw
+           bw_to_bytes(kp.bout); // payload
+}
+
+void Peer::send_dpf_route_key(const DpfRouteKeyPack &k) {
+    // 1. 计算总大小
+    size_t total_dpf_keys_size = 0;
+    for (int i = 0; i < k.size; ++i) {
+        total_dpf_keys_size += get_dpf_key_pack_size_in_bytes(k.routing_keys[i]);
+    }
+    size_t r_shares_size = k.size * bw_to_bytes(k.rank_bin);
+    size_t s_shares_size = k.size * bw_to_bytes(k.data_bin);
+    size_t total_size = total_dpf_keys_size + r_shares_size + s_shares_size;
+
+    // 2. 创建缓冲区并拷贝数据
+    char* buffer = new char[total_size];
+    char* current_ptr = buffer;
+
+    // 2.1 拷贝 DPF 密钥
+    for (int i = 0; i < k.size; ++i) {
+        const DPFKeyPack& dpf_key = k.routing_keys[i];
+        size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
+        memcpy(current_ptr, dpf_key.s, s_bytes);
+        current_ptr += s_bytes;
+
+        size_t tcw_bytes = bw_to_bytes(dpf_key.bin);
+        memcpy(current_ptr, &dpf_key.tLcw, tcw_bytes);
+        current_ptr += tcw_bytes;
+        memcpy(current_ptr, &dpf_key.tRcw, tcw_bytes);
+        current_ptr += tcw_bytes;
+        
+        size_t payload_bytes = bw_to_bytes(dpf_key.bout);
+        memcpy(current_ptr, &dpf_key.payload, payload_bytes);
+        current_ptr += payload_bytes;
+    }
+    
+    // 2.2 拷贝 r_shares
+    // 注意：send_batched_input 内部有类型转换，这里需要模拟它或直接拷贝
+    memcpy(current_ptr, &k.r_shares, r_shares_size);
+    current_ptr += r_shares_size;
+
+    // 2.3 拷贝 s_shares
+    memcpy(current_ptr, &k.s_shares, s_shares_size);
+    current_ptr += s_shares_size;
+
+    // 3. 一次性发送
+    this->keyBuf->write(buffer, total_size);
+
+    // 4. 清理
+    delete[] buffer;
+}
+
+DpfRouteKeyPack Dealer::recv_dpf_route_key(int size, int data_bin, int rank_bin) {
+    // 1. 创建密钥包对象 (构造函数会分配内部数组)
+    DpfRouteKeyPack k(size, data_bin, rank_bin);
+
+    // 2. 计算总大小并一次性接收
+    size_t total_dpf_keys_size = 0;
+    for (int i = 0; i < size; ++i) {
+        // 这里的 routing_keys[i] 是刚被构造函数初始化的
+        total_dpf_keys_size += get_dpf_key_pack_size_in_bytes(k.routing_keys[i]);
+    }
+    size_t r_shares_size = size * bw_to_bytes(rank_bin);
+    size_t s_shares_size = size * bw_to_bytes(data_bin);
+    size_t total_size = total_dpf_keys_size + r_shares_size + s_shares_size;
+    
+    char* buffer = new char[total_size];
+    this->keyBuf->read(buffer, total_size);
+    char* current_ptr = buffer;
+
+    // 3. 从缓冲区中解析数据
+    // 3.1 解析 DPF 密钥
+    for (int i = 0; i < size; ++i) {
+        DPFKeyPack& dpf_key = k.routing_keys[i];
+        size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
+        memcpy(dpf_key.s, current_ptr, s_bytes);
+        current_ptr += s_bytes;
+        
+        size_t tcw_bytes = bw_to_bytes(dpf_key.bin);
+        memcpy(&dpf_key.tLcw, current_ptr, tcw_bytes);
+        current_ptr += tcw_bytes;
+        memcpy(&dpf_key.tRcw, current_ptr, tcw_bytes);
+        current_ptr += tcw_bytes;
+
+        size_t payload_bytes = bw_to_bytes(dpf_key.bout);
+        memcpy(&dpf_key.payload, current_ptr, payload_bytes);
+        current_ptr += payload_bytes;
+    }
+
+    // 3.2 解析 r_shares
+    memcpy(k.r_shares, current_ptr, r_shares_size);
+    current_ptr += r_shares_size;
+
+    // 3.3 解析 s_shares
+    memcpy(k.s_shares, current_ptr, s_shares_size);
+
+    // 4. 清理并返回
+    delete[] buffer;
+    return k;
 }

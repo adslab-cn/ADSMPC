@@ -106,3 +106,8 @@ target_link_libraries(dpf ${PROJECT_NAME})
 
 # target_link_libraries(softmax ${PROJECT_NAME})
 
+
+add_executable(test_route
+    tests/routing.cpp
+)
+target_link_libraries (test_route ${PROJECT_NAME})

@@ -53,6 +53,8 @@ void microbenchmark_conv(int party) {
     FSSConfig::num_threads = 4;
     std::string ip = "127.0.0.1";
     // std::string ip = "172.31.45.174";
+    
+    std::cerr << "FSS init" << std::endl;
     FSS->init(ip, true); 
     const u64 bs = 20; //batch size
 

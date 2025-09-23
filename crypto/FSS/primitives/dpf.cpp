@@ -523,3 +523,50 @@ std::pair<GroupElement, GroupElement> evalAll_reduce_et(int party, DPFETKeyPack 
     evalAll_reduce_helper_et(party, key, rightShift, tab, out, corr, s, t, 0, 0);
     return std::make_pair(out, corr);
 }
+
+GroupElement evalDPF_with_payload(int party, DPFKeyPack &key, GroupElement x)
+{
+    static const block notOneBlock = toBlock(~0, ~1);
+    int bin = key.bin;
+
+    // 初始化 s 和 t
+    block s = _mm_loadu_si128(key.s);
+    u8 t = party;
+
+    // 沿树路径向下遍历
+    for (int i = 0; i < bin; ++i)
+    {
+        // 您的实现中断言 lsb(s) 是 0，因为控制位 t 是分开存储的
+        // assert(lsb(s) == 0); 
+        
+        const u8 x_i = static_cast<uint8_t>(x >> (bin - 1 - i)) & 1;
+        
+        AES ak(s);
+        block ct = ak.ecbEncBlock(toBlock(0, x_i));
+        
+        u8 t_old = t;
+        s = ct & notOneBlock;
+        t = lsb(ct);
+
+        if (t_old) { // 如果在特殊路径上
+            s = s ^ _mm_loadu_si128(key.s + i + 1);
+            t = t ^ ((key.tcw[x_i] >> (bin - 1 - i)) & 1);
+        }
+    }
+
+    // --- 最终份额计算 ---
+    // 这是与 evalDPF_EQ 唯一不同的地方
+
+    // 从最终的种子 s 中提取数值部分
+    GroupElement final_s_val = _mm_extract_epi64(s, 0);
+
+    // 根据 FSS 输出公式计算份额
+    GroupElement result = final_s_val + key.payload * t;
+    
+    // 乘以 (-1)^party
+    if (party == 1) {
+        return -result;
+    }
+    
+    return result;
+}
