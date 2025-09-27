@@ -31,7 +31,7 @@ public:
     void initPrngs()
     {
         u64 seedKey = 0xdeadbeefbadc0ffe;
-        std::cerr << "get ready for party"<<FSSConfig::party << std::endl;
+        std::cerr << "get ready for party: "<<FSSConfig::party << std::endl;
         for(int i = 0; i < 256; ++i) {
             FSSConfig::prngs[i].SetSeed(osuCrypto::toBlock(i, seedKey));
         }
@@ -109,6 +109,7 @@ public:
             throw std::runtime_error("Invalid party");
         }
         input_prng_init();
+        prng_shared_init();
     }
 
     void finalize()

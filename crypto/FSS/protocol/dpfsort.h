@@ -1,4 +1,4 @@
-#include <aux_parameter/keypack.h>
+#include "../aux_parameter/keypack.h"
 // Dealer 端的密钥生成函数
 std::pair<DpfRouteKeyPack, DpfRouteKeyPack> keyGenDpfRoute(
     int size, int data_bin, int rank_bin

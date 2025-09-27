@@ -117,15 +117,19 @@ void input_layer(GroupElement *x, GroupElement *x_mask, int size, int owner)
         , true, (owner == SERVER ? accumulatedInputTimeOffline : accumulatedInputTimeOnline))
     }
     else {
-        uint64_t *tmp = new uint64_t[size];
         TIME_THIS_BLOCK_FOR_INPUT_IF(
-        peer->recv_batched_input(tmp, size, bitlength);
+            // 直接将网络数据读入 x_mask 指向的内存
+            peer->recv_batched_input(x_mask, size, bitlength);
         , true, (owner == SERVER ? accumulatedInputTimeOffline : accumulatedInputTimeOnline))
-        // todo: parallelize this maybe?
-        for(int i = 0; i < size; ++i) {
-            x[i] = tmp[i];
-        }
-        delete[] tmp;
+        // uint64_t *tmp = new uint64_t[size];
+        // TIME_THIS_BLOCK_FOR_INPUT_IF(
+        // peer->recv_batched_input(tmp, size, bitlength);
+        // , true, (owner == SERVER ? accumulatedInputTimeOffline : accumulatedInputTimeOnline))
+        // // todo: parallelize this maybe?
+        // for(int i = 0; i < size; ++i) {
+        //     x[i] = tmp[i];
+        // }
+        // delete[] tmp;
     }
     counter[owner - SERVER] += size;
 }

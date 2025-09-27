@@ -1,7 +1,7 @@
-#include "protocol/dpfsort.h"
-#include "primitives/dpf.h"
+#include "dpfsort.h"
+#include "../primitives/dpf.h"
 #include <assert.h>
-#include <aux_parameter/utils.h> // 需要 modularInverse
+#include "../aux_parameter/utils.h" // 需要 modularInverse
 #include <omp.h> // 为了并行化
 
 
@@ -97,18 +97,14 @@ void online_round2_compute(
         GroupElement target_rank_k = k;
         GroupElement result_share_k = 0;
 
-        // 计算内积: Σ (z_tilde_public[i] * v_share[i])
         for (int i = 0; i < size; ++i) {
             GroupElement dpf_input = y_hat_public[i] - target_rank_k;
             mod(dpf_input, rank_bin);
             
-            // evalDPF_with_payload 是你 primitives/dpf.cpp 中的函数
             GroupElement v_share_i = evalDPF_with_payload(party, key.routing_keys[i], dpf_input);
-            // 注意：evalDPF_with_payload 的输出需要模 data_bin
             mod(v_share_i, data_bin);
 
             GroupElement term = z_tilde_public[i] * v_share_i;
-            // 本地乘法后也需要模
             mod(term, data_bin);
             
             result_share_k += term;

@@ -27,6 +27,7 @@
         "condition_variable": "cpp",
         "cstdint": "cpp",
         "deque": "cpp",
+        "list": "cpp",
         "map": "cpp",
         "set": "cpp",
         "string": "cpp",
@@ -42,6 +43,7 @@
         "optional": "cpp",
         "random": "cpp",
         "ratio": "cpp",
+        "source_location": "cpp",
         "string_view": "cpp",
         "system_error": "cpp",
         "tuple": "cpp",
@@ -65,10 +67,13 @@
         "span": "cpp",
         "sstream": "cpp",
         "stdexcept": "cpp",
+        "stdfloat": "cpp",
         "stop_token": "cpp",
         "streambuf": "cpp",
         "thread": "cpp",
+        "typeindex": "cpp",
         "typeinfo": "cpp",
-        "variant": "cpp"
+        "variant": "cpp",
+        "filesystem": "cpp"
     }
 }

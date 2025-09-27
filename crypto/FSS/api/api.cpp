@@ -23,6 +23,7 @@
 #include "../primitives/dpf.h"
 // #include "../protocol/taylor.h"
 #include "../protocol/float.h"
+#include "../protocol/dpfsort.h"
 
 #include <cassert>
 #include <iostream>
@@ -61,7 +62,20 @@ auto time_comm_this_block(Functor f)
     uint64_t comm_end = peer->bytesReceived() + peer->bytesSent();
     return std::make_pair((uint64_t)(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()), comm_end - comm_start);
 }
-
+void prng_shared_init() {
+    if (party == DEALER) {
+        osuCrypto::AES aesSeed(prngs[0].get<osuCrypto::block>());
+        auto commonSeed = aesSeed.ecbEncBlock(osuCrypto::ZeroBlock);
+        
+        server->send_block(commonSeed);
+        client->send_block(commonSeed); 
+        
+        prngShared.SetSeed(commonSeed);
+    } else { 
+        auto commonSeed = dealer->recv_block();
+        prngShared.SetSeed(commonSeed);
+    }
+}
 /* 初始化通信、同步、计时器 */
 void FSS::start()
 {
@@ -95,18 +109,18 @@ void FSS::start()
         client->zeroBytesSent();
     }
 
-    if (party == DEALER)
-    {
-        osuCrypto::AES aesSeed(prngs[0].get<osuCrypto::block>());
-        auto commonSeed = aesSeed.ecbEncBlock(osuCrypto::ZeroBlock);
-        server->send_block(commonSeed);
-        prngShared.SetSeed(commonSeed);
-    }
-    else if (party == SERVER)
-    {
-        auto commonSeed = dealer->recv_block();
-        prngShared.SetSeed(commonSeed);
-    }
+    // if (party == DEALER)
+    // {
+    //     osuCrypto::AES aesSeed(prngs[0].get<osuCrypto::block>());
+    //     auto commonSeed = aesSeed.ecbEncBlock(osuCrypto::ZeroBlock);
+    //     server->send_block(commonSeed);
+    //     prngShared.SetSeed(commonSeed);
+    // }
+    // else if (party == SERVER)
+    // {
+    //     auto commonSeed = dealer->recv_block();
+    //     prngShared.SetSeed(commonSeed);
+    // }
     sendTime = 0;
     recvTime = 0;
     packTime = 0;
@@ -1554,4 +1568,249 @@ void MaxPoolBackward(int32_t N, int32_t H, int32_t W, int32_t C, int32_t FH,
         delete[] keys;
     }
     std::cerr << ">> MaxPoolBackward - End" << std::endl;
+}
+std::pair<ElemWiseMulKeyPack, ElemWiseMulKeyPack> keyGenElemWiseMul(int32_t size)
+{
+    ElemWiseMulKeyPack k0, k1;
+    k0.size = k1.size = size;
+    k0.a = new GroupElement[size];
+    k1.a = new GroupElement[size];
+    k0.b = new GroupElement[size];
+    k1.b = new GroupElement[size];
+    k0.c = new GroupElement[size];
+    k1.c = new GroupElement[size];
+
+    #pragma omp parallel for
+    for (int i = 0; i < size; i++) {
+        GroupElement a = random_ge(bitlength);
+        GroupElement b = random_ge(bitlength);
+        GroupElement c = a * b;
+
+        auto a_split = splitShare(a, bitlength);
+        k0.a[i] = a_split.first;
+        k1.a[i] = a_split.second;
+
+        auto b_split = splitShare(b, bitlength);
+        k0.b[i] = b_split.first;
+        k1.b[i] = b_split.second;
+
+        auto c_split = splitShare(c, bitlength);
+        k0.c[i] = c_split.first;
+        k1.c[i] = c_split.second;
+    }
+
+    return std::make_pair(k0, k1);
+}
+void evalElemWiseMul(int party, int32_t size, 
+                     const GroupElement* x, const GroupElement* y, 
+                     GroupElement* z, const ElemWiseMulKeyPack &key)
+{
+    GroupElement* d_shares = new GroupElement[size];
+    GroupElement* e_shares = new GroupElement[size];
+
+    // 1. 计算 d = x - a 和 e = y - b 的份额
+    #pragma omp parallel for
+    for (int i = 0; i < size; i++) {
+        d_shares[i] = x[i] - key.a[i];
+        e_shares[i] = y[i] - key.b[i];
+    }
+
+    // 2. 重构以获得公开的 d 和 e
+    // 注意: reconstruct 会修改传入的数组，所以我们用 d_shares 的副本来重构 e
+    GroupElement* e_reconstruct_buffer = new GroupElement[size];
+    memcpy(e_reconstruct_buffer, e_shares, size * sizeof(GroupElement));
+    
+    reconstruct(size, d_shares, bitlength); // d_shares 现在是公开的 d
+    print_array("ElemWiseMul - d (x - a)", party, size, d_shares, 10);
+    reconstruct(size, e_reconstruct_buffer, bitlength); // e_reconstruct_buffer 现在是公开的 e
+    
+
+    print_array("ElemWiseMul - e (y - b)", party, size, e_reconstruct_buffer, 10);
+
+    GroupElement* d_public = d_shares;
+    GroupElement* e_public = e_reconstruct_buffer;
+
+    // 3. 根据 Beaver Triple 协议计算最终的输出份额 z
+    // party 2 (SERVER) 的 party_bit 是 0, party 3 (CLIENT) 的 party_bit 是 1
+    int party_bit = (party - 2); 
+
+    #pragma omp parallel for
+    for (int i = 0; i < size; i++) {
+        z[i] = (party_bit * d_public[i] * e_public[i]) + 
+               (d_public[i] * key.b[i]) + 
+               (e_public[i] * key.a[i]) + 
+               key.c[i];
+    }
+
+    delete[] d_shares;
+    delete[] e_shares;
+    delete[] e_reconstruct_buffer;
+}
+
+void ElemWiseMul(int32_t size, 
+                 MASK_PAIR(GroupElement *A), // 展开为 A, A_mask
+                 MASK_PAIR(GroupElement *B), // 展开为 B, B_mask
+                 MASK_PAIR(GroupElement *C)) // 展开为 C, C_mask
+{
+    if (party == DEALER) {
+        auto keys = keyGenElemWiseMul(size);
+        server->send_elemwisemul_key(keys.first);
+        client->send_elemwisemul_key(keys.second);
+        
+        // #pragma omp parallel for
+        // for (int i = 0; i < size; i++) {
+        //     GroupElement beaver_a = keys.first.a[i] + keys.second.a[i];
+        //     GroupElement beaver_b = keys.first.b[i] + keys.second.b[i];
+        //     GroupElement beaver_c = keys.first.c[i] + keys.second.c[i];
+        //     // 输出掩码 C_mask = c - a*B - b*A + a*b
+        //     C_mask[i] = beaver_c - beaver_a * B_mask[i] - beaver_b * A_mask[i];
+        // }
+
+        // 释放密钥内存
+        delete[] keys.first.a; delete[] keys.first.b; delete[] keys.first.c;
+        delete[] keys.second.a; delete[] keys.second.b; delete[] keys.second.c;
+    } else {
+        auto key = dealer->recv_elemwisemul_key(size);
+        std::cerr << "ElemWiseMul - Start Eval" << std::endl;
+        evalElemWiseMul(party, size, A, B, C, key);
+        delete[] key.a; delete[] key.b; delete[] key.c;
+    }
+}
+void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share_out, int owner)
+{
+    if (size == 0) return;
+    
+    if (party == DEALER) {
+        for (int i = 0; i < size; ++i) prngShared.get<uint64_t>();
+        return;
+    }
+
+    if (party == owner) {
+        //生成掩码的阶段必须是串行的
+        std::vector<GroupElement> peer_share(size);
+        for (int i = 0; i < size; ++i) {
+            peer_share[i] = prngShared.get<uint64_t>();
+            mod(peer_share[i], bitlength);
+        }
+
+        peer->send_ge_array(peer_share.data(), size);
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            share_out[i] = plain_in[i] - peer_share[i];
+            mod(share_out[i], bitlength);
+        }
+
+    } else {
+        peer->recv_ge_array(share_out, size);
+        for (int i = 0; i < size; ++i) {
+            prngShared.get<uint64_t>();
+        }
+    }
+}
+void print_array(const std::string& title, int party, int size, const GroupElement* arr, int limit) {
+    //if (party == DEALER) return; // Dealer 不打印
+
+    std::cout << "\n--- [Party " << party << "] " << title << " ---" << std::endl;
+    for (int i = 0; i < size && i < limit; ++i) {
+        // 为了可读性，我们可以将 uint64_t 转换为 int64_t 来打印
+        // 这样负数（在模运算下的大正数）会更容易看懂
+        std::cout << "  [" << i << "]: " << (int64_t)arr[i] << std::endl;
+    }
+    if (size > limit) {
+        std::cout << "  ..." << std::endl;
+    }
+}
+void DpfRoute(
+    int32_t size,
+    MASK_PAIR(GroupElement *y_in),  // 展开为 y_in, y_in_mask
+    int rank_bw,
+    MASK_PAIR(GroupElement *z_in),  // 展开为 z_in, z_in_mask
+    int data_bw, 
+    MASK_PAIR(GroupElement *z_out)) // 展开为 z_out, z_out_mask
+{
+    std::string prefix = "DPF_route::";
+    if (party == DEALER) {
+        auto keys = keyGenDpfRoute(size, data_bw, rank_bw);
+        server->send_dpf_route_key(keys.first);
+        client->send_dpf_route_key(keys.second);
+        GroupElement* r = new GroupElement[size];
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            r[i] = keys.first.r_shares[i] + keys.second.r_shares[i];
+        }
+        print_array("Original Plaintext 'r'", party, size, r);
+        print_array("Share 'r_1'", party, size, keys.first.r_shares);
+        print_array("SHare 'r_2'", party, size, keys.second.r_shares);
+        GroupElement* s_shares_complete = new GroupElement[size];
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            s_shares_complete[i] = keys.first.s_shares[i] + keys.second.s_shares[i];
+            mod(s_shares_complete[i], data_bw);
+        }
+        
+        GroupElement* z_tilde_mask = new GroupElement[size];
+
+
+        ElemWiseMul(size, 
+                    z_in_mask, z_in_mask, 
+                    s_shares_complete, s_shares_complete, 
+                    z_tilde_mask, z_tilde_mask); 
+
+        delete[] s_shares_complete;
+        delete[] z_tilde_mask;
+
+    } else { 
+        DpfRouteKeyPack key;
+        
+        std::cerr << "\n1\n" << std::endl;
+        std::cerr << "\n... peer->sync();  start...\n" << std::endl;
+        peer->sync();
+        std::cerr << "\n... peer->sync();  end...\n" << std::endl;
+        std::cerr << "\n3\n" << std::endl;
+        
+        uint64_t keysize_start = dealer->bytesReceived();
+        std::cerr << "\n4\n" << std::endl;
+        key = dealer->recv_dpf_route_key(size, data_bw, rank_bw);
+        std::cerr << "\n5\n" << std::endl;
+        std::vector<GroupElement> y_plus_r_shares(size);
+        std::vector<GroupElement> z_mul_s_shares(size);
+        std::cerr << "\n6\n" << std::endl;
+
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            y_plus_r_shares[i] = y_in[i] + key.r_shares[i];
+        }
+        
+        
+        // GroupElement* r_temp = new GroupElement[size];
+        // memcpy(r_temp, key.r_shares, size * sizeof(GroupElement));
+        // print_array("Share 'r_share'", party, size, r_temp);
+        // reconstruct(size, r_temp, FSSConfig::bitlength);
+        // print_array("Original Plaintext 'r'", party, size, r_temp);
+
+
+        // GroupElement* yr_temp = new GroupElement[size];
+        // memcpy(yr_temp, y_plus_r_shares.data(), size * sizeof(GroupElement));
+        // print_array("Original Plaintext 'y_r_share'", party, size, yr_temp);
+        // reconstruct(size, yr_temp, FSSConfig::bitlength);
+        // print_array("Original Plaintext 'y_r'", party, size, yr_temp);
+
+        std::cerr << "\n7\n" << std::endl;
+        peer->sync();
+        std::cerr << "\n7\n" << std::endl;
+        ElemWiseMul(size, 
+                    z_in, z_in, 
+                    key.s_shares, key.s_shares,
+                    z_mul_s_shares.data(), z_mul_s_shares.data());
+        std::cerr << "\n8\n" << std::endl;
+        reconstruct(size, y_plus_r_shares.data(), key.rank_bin); 
+        GroupElement* y_hat_public = y_plus_r_shares.data(); 
+        std::cerr << "\n9\n" << std::endl;
+        reconstruct(size, z_mul_s_shares.data(), key.data_bin);
+        GroupElement* z_tilde_public = z_mul_s_shares.data();
+        std::cerr << "\n10\n" << std::endl;
+        online_round2_compute(party, key, y_hat_public, z_tilde_public, z_out);
+        reconstruct(size, z_out, data_bw);
+        std::cerr << "\n11\n" << std::endl;
+    }
 }

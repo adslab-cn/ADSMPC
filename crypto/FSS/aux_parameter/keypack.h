@@ -462,21 +462,24 @@ struct DpfRouteKeyPack {
     int size;
     int data_bin;
     int rank_bin;
-    DPFKeyPack* routing_keys;
+    DPFKeyPack *routing_keys;
+    GroupElement *r_shares;
+    GroupElement *s_shares;
 
-    GroupElement* r_shares;
-    GroupElement* s_shares;
-    DpfRouteKeyPack() : size(0), data_bin(0), rank_bin(0), 
-                    routing_keys(nullptr), r_shares(nullptr), s_shares(nullptr) {}
-    // 带参数的构造函数，用于分配内存
-    DpfRouteKeyPack(int s, int d_bin, int r_bin) 
-        : size(s), data_bin(d_bin), rank_bin(r_bin) {
-        routing_keys = new DPFKeyPack[s];
-        // 初始化每个 DPFKeyPack
-        for (int i = 0; i < s; ++i) {
-            new (&routing_keys[i]) DPFKeyPack(r_bin, d_bin);
-        }
-        r_shares = new GroupElement[s];
-        s_shares = new GroupElement[s];
+    // 构造函数
+    DpfRouteKeyPack(int _size, int _data_bin, int _rank_bin) {
+        size = _size;
+        data_bin = _data_bin;
+        rank_bin = _rank_bin;
+        routing_keys = new DPFKeyPack[size];
+        r_shares = new GroupElement[size];
+        s_shares = new GroupElement[size];
     }
+        DpfRouteKeyPack() : size(0), data_bin(0), rank_bin(0), 
+                    routing_keys(nullptr), r_shares(nullptr), s_shares(nullptr) {}
+};
+
+struct ElemWiseMulKeyPack {
+    int32_t size;
+    GroupElement *a, *b, *c;
 };

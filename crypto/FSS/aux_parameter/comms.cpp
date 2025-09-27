@@ -9,7 +9,32 @@
 
 using namespace FSSConfig;
 
+void print_socket_info(const std::string& name, int sockfd) {
+    if (sockfd < 0) {
+        std::cerr << "  Socket '" << name << "': Invalid" << std::endl;
+        return;
+    }
 
+    struct sockaddr_in local_addr, peer_addr;
+    socklen_t addr_len = sizeof(struct sockaddr_in);
+
+    // 获取本地地址
+    if (getsockname(sockfd, (struct sockaddr*)&local_addr, &addr_len) == 0) {
+        char local_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &local_addr.sin_addr, local_ip, sizeof(local_ip));
+        int local_port = ntohs(local_addr.sin_port);
+        std::cerr << "  Socket '" << name << "' (fd=" << sockfd << "):" << std::endl;
+        std::cerr << "    Local Address : " << local_ip << ":" << local_port << std::endl;
+    }
+
+    // 获取远端地址
+    if (getpeername(sockfd, (struct sockaddr*)&peer_addr, &addr_len) == 0) {
+        char peer_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip));
+        int peer_port = ntohs(peer_addr.sin_port);
+        std::cerr << "    Peer Address  : " << peer_ip << ":" << peer_port << std::endl;
+    }
+}
 SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
 {
     this->t = BUF_SOCKET;
@@ -77,9 +102,14 @@ SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)
 // 进行简单的握手验证
 void SocketBuf::sync()
 {
+    print_socket_info("sendsocket", this->sendsocket);
+    print_socket_info("recvsocket", this->recvsocket);
     char buf[1] = {1}; // 发送的同步字节为1
+    std::cerr << "\n... timeing  1...\n" << std::endl;
     send(sendsocket, buf, 1, 0); // 发送同步信号
+    std::cerr << "\n... timeing  2...\n" << std::endl;
     recv(recvsocket, buf, 1, MSG_WAITALL); // 阻塞直到收到1字节响应
+    std::cerr << "\n... timeing  3...\n" << std::endl;
     bytesReceived += 1; // 更新接收字节数
     bytesSent += 1; // 更新发送字节数
     always_assert(buf[0] == 1); // 验证响应内容是否正确
@@ -1802,21 +1832,41 @@ size_t get_dpf_key_pack_size_in_bytes(const DPFKeyPack& kp) {
            bw_to_bytes(kp.bin) +  // tRcw
            bw_to_bytes(kp.bout); // payload
 }
+// In aux_parameter/comms.cpp (Peer/Dealer class implementation)
+void Peer::send_elemwisemul_key(const ElemWiseMulKeyPack &k) {
+    send_ge_array(k.a, k.size);
+    send_ge_array(k.b, k.size);
+    send_ge_array(k.c, k.size);
+}
 
+ElemWiseMulKeyPack Dealer::recv_elemwisemul_key(int32_t size) {
+    ElemWiseMulKeyPack k;
+    k.size = size;
+    k.a = new GroupElement[size];
+    k.b = new GroupElement[size];
+    k.c = new GroupElement[size];
+    recv_ge_array(k.a, size);
+    recv_ge_array(k.b, size);
+    recv_ge_array(k.c, size);
+    return k;
+}
 void Peer::send_dpf_route_key(const DpfRouteKeyPack &k) {
     // 1. 计算总大小
+    const GroupElement SENTINEL = 42;
+    const size_t SENTINEL_SIZE = sizeof(GroupElement); // 8 字节
     size_t total_dpf_keys_size = 0;
     for (int i = 0; i < k.size; ++i) {
         total_dpf_keys_size += get_dpf_key_pack_size_in_bytes(k.routing_keys[i]);
     }
-    size_t r_shares_size = k.size * bw_to_bytes(k.rank_bin);
-    size_t s_shares_size = k.size * bw_to_bytes(k.data_bin);
-    size_t total_size = total_dpf_keys_size + r_shares_size + s_shares_size;
+    size_t r_shares_size = k.size * sizeof(GroupElement);
+    size_t s_shares_size = k.size * sizeof(GroupElement);
+    size_t total_size = SENTINEL_SIZE + total_dpf_keys_size + r_shares_size + s_shares_size;
 
     // 2. 创建缓冲区并拷贝数据
     char* buffer = new char[total_size];
     char* current_ptr = buffer;
-
+    memcpy(current_ptr, &SENTINEL, SENTINEL_SIZE);
+    current_ptr += SENTINEL_SIZE;
     // 2.1 拷贝 DPF 密钥
     for (int i = 0; i < k.size; ++i) {
         const DPFKeyPack& dpf_key = k.routing_keys[i];
@@ -1835,44 +1885,47 @@ void Peer::send_dpf_route_key(const DpfRouteKeyPack &k) {
         current_ptr += payload_bytes;
     }
     
-    // 2.2 拷贝 r_shares
-    // 注意：send_batched_input 内部有类型转换，这里需要模拟它或直接拷贝
-    memcpy(current_ptr, &k.r_shares, r_shares_size);
+    memcpy(current_ptr, k.r_shares, r_shares_size);
     current_ptr += r_shares_size;
 
-    // 2.3 拷贝 s_shares
-    memcpy(current_ptr, &k.s_shares, s_shares_size);
+    memcpy(current_ptr, k.s_shares, s_shares_size);
     current_ptr += s_shares_size;
 
-    // 3. 一次性发送
     this->keyBuf->write(buffer, total_size);
 
-    // 4. 清理
+
     delete[] buffer;
 }
 
 DpfRouteKeyPack Dealer::recv_dpf_route_key(int size, int data_bin, int rank_bin) {
+    const GroupElement SENTINEL = 42;
+    const size_t SENTINEL_SIZE = sizeof(GroupElement);
     // 1. 创建密钥包对象 (构造函数会分配内部数组)
     DpfRouteKeyPack k(size, data_bin, rank_bin);
-
+    for (int i = 0; i < size; ++i) {
+        k.routing_keys[i].bin = rank_bin;
+        k.routing_keys[i].bout = data_bin;
+    }
+    
     // 2. 计算总大小并一次性接收
     size_t total_dpf_keys_size = 0;
     for (int i = 0; i < size; ++i) {
-        // 这里的 routing_keys[i] 是刚被构造函数初始化的
         total_dpf_keys_size += get_dpf_key_pack_size_in_bytes(k.routing_keys[i]);
     }
-    size_t r_shares_size = size * bw_to_bytes(rank_bin);
-    size_t s_shares_size = size * bw_to_bytes(data_bin);
-    size_t total_size = total_dpf_keys_size + r_shares_size + s_shares_size;
+    size_t r_shares_size = size * sizeof(GroupElement);
+    size_t s_shares_size = size * sizeof(GroupElement);
+    size_t total_size = SENTINEL_SIZE + total_dpf_keys_size + r_shares_size + s_shares_size;
     
     char* buffer = new char[total_size];
     this->keyBuf->read(buffer, total_size);
     char* current_ptr = buffer;
-
-    // 3. 从缓冲区中解析数据
-    // 3.1 解析 DPF 密钥
+    GroupElement t;
+    memcpy(&t, current_ptr, SENTINEL_SIZE);
+    current_ptr += SENTINEL_SIZE;
+    always_assert(t == SENTINEL);
     for (int i = 0; i < size; ++i) {
         DPFKeyPack& dpf_key = k.routing_keys[i];
+        dpf_key.s = new osuCrypto::block[dpf_key.bin + 1];
         size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
         memcpy(dpf_key.s, current_ptr, s_bytes);
         current_ptr += s_bytes;
@@ -1887,15 +1940,20 @@ DpfRouteKeyPack Dealer::recv_dpf_route_key(int size, int data_bin, int rank_bin)
         memcpy(&dpf_key.payload, current_ptr, payload_bytes);
         current_ptr += payload_bytes;
     }
-
+      std::cerr << "\nend for \n" << std::endl;
     // 3.2 解析 r_shares
     memcpy(k.r_shares, current_ptr, r_shares_size);
     current_ptr += r_shares_size;
 
     // 3.3 解析 s_shares
     memcpy(k.s_shares, current_ptr, s_shares_size);
-
     // 4. 清理并返回
     delete[] buffer;
     return k;
+}
+
+void Peer::recv_ge_array(GroupElement *arr, int size)
+{
+    int bitlength = sizeof(GroupElement) * 8; 
+    recv_batched_input(arr, size, bitlength);
 }

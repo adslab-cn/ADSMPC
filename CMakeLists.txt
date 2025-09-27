@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.17)
 project(ADSMPC)
-
+set(CMAKE_BUILD_TYPE Debug)
 if(APPLE)
 
     if(CMAKE_C_COMPILER_ID MATCHES "Clang\$")
@@ -108,6 +108,6 @@ target_link_libraries(dpf ${PROJECT_NAME})
 
 
 add_executable(test_route
-    tests/routing.cpp
+    tests/bench/routing.cpp
 )
 target_link_libraries (test_route ${PROJECT_NAME})

@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <fstream>
+#include <filesystem>
 
 #define DEALER 1
 #define SERVER 2
@@ -318,6 +319,10 @@ public:
     void recv_batched_input(uint64_t *g, int size, int bw);
 
     void send_dpf_route_key(const DpfRouteKeyPack &k);
+
+    void send_elemwisemul_key(const ElemWiseMulKeyPack &k);
+
+    void recv_ge_array(GroupElement *arr, int size);
 };
 
 Peer* waitForPeer(int port); // 服务器等待客户端连接
@@ -459,4 +464,7 @@ public:
     SlothSignExtendKeyPack recv_sloth_sign_extend_key(int bin, int bout);
 
     DpfRouteKeyPack recv_dpf_route_key(int size, int data_bin, int rank_bin);
+
+    ElemWiseMulKeyPack recv_elemwisemul_key(int32_t size);
 };
+

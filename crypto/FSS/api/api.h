@@ -94,3 +94,14 @@ void SlothRelu(int size, int bin, GroupElement *x, GroupElement *y, std::string 
 void Softmax(int32_t s1, int32_t s2, int bin, GroupElement *x, GroupElement *y, int32_t scale);
 
 void SlothMax(int size, int bin, GroupElement *x, GroupElement *y, GroupElement *out, std::string prefix);
+void ElemWiseMul(int32_t size, MASK_PAIR(GroupElement *A), MASK_PAIR(GroupElement *B), MASK_PAIR(GroupElement *C));
+void DpfRoute(
+    int32_t size,
+    MASK_PAIR(GroupElement *y_in),
+    int rank_bw,
+    MASK_PAIR(GroupElement *z_in),
+    int data_bw, 
+    MASK_PAIR(GroupElement *z_out));
+void prng_shared_init();
+void print_array(const std::string& title, int party, int size, const GroupElement* arr, int limit = 10);
+void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share_out, int owner);
