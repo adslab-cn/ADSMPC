@@ -34,7 +34,7 @@ void test_dpf_sort(int party) {
     std::string ip = "127.0.0.1";
     FSS->init(ip, true);
 
-    const int size = 10;
+    const int size = 100;
     const int rank_bw = 7; 
     const int data_bw = 32;
 
@@ -85,10 +85,7 @@ void test_dpf_sort(int party) {
     GroupElement* y_in_mask = new GroupElement[size]();
     GroupElement* z_in_mask = new GroupElement[size]();
     GroupElement* z_out_mask = new GroupElement[size]();
-    std::cerr << "\n... FSS::start();  start...\n" << std::endl;
     FSS::start();
-    std::cerr << "\n... FSS::start();  end...\n" << std::endl;
-    std::cerr << "\n... Now, proceeding with the DPF Route protocol ...\n" << std::endl;
     DpfRoute(
         size,
         y_in_shares, y_in_mask, rank_bw,
@@ -99,7 +96,10 @@ void test_dpf_sort(int party) {
 
     if (party != DEALER) {
         reconstruct(size, z_out, data_bw); 
-        // ... (验证和清理) ...
+        //reconstruct(size, z_out, bitlength);
+        mod_array(z_out,size,data_bw);
+        print_array("Original Plaintext 'z'", party, size, z_out);
+        std::cerr << "\n11\n" << std::endl;
     }
     FSS->finalize();
     //...

@@ -524,49 +524,122 @@ std::pair<GroupElement, GroupElement> evalAll_reduce_et(int party, DPFETKeyPack 
     return std::make_pair(out, corr);
 }
 
+// GroupElement evalDPF_with_payload(int party, DPFKeyPack &key, GroupElement x)
+// {
+//     static const block notOneBlock = toBlock(~0, ~1);
+//     int bin = key.bin;
+
+//     // 初始化 s 和 t
+//     block s = _mm_loadu_si128(key.s);
+//     u8 t = party;
+
+//     // 沿树路径向下遍历
+//     for (int i = 0; i < bin; ++i)
+//     {
+//         // 您的实现中断言 lsb(s) 是 0，因为控制位 t 是分开存储的
+//         // assert(lsb(s) == 0); 
+        
+//         const u8 x_i = static_cast<uint8_t>(x >> (bin - 1 - i)) & 1;
+        
+//         AES ak(s);
+//         block ct = ak.ecbEncBlock(toBlock(0, x_i));
+        
+//         u8 t_old = t;
+//         s = ct & notOneBlock;
+//         t = lsb(ct);
+
+//         if (t_old) { // 如果在特殊路径上
+//             s = s ^ _mm_loadu_si128(key.s + i + 1);
+//             t = t ^ ((key.tcw[x_i] >> (bin - 1 - i)) & 1);
+//         }
+//     }
+
+//     // --- 最终份额计算 ---
+//     // 这是与 evalDPF_EQ 唯一不同的地方
+
+//     // 从最终的种子 s 中提取数值部分
+//     GroupElement final_s_val = _mm_extract_epi64(s, 0);
+
+//     // 根据 FSS 输出公式计算份额
+//     GroupElement result = final_s_val + key.payload * t;
+    
+//     // 乘以 (-1)^party
+//     if (party == 1) {
+//         return -result;
+//     }
+//     mod(result, key.bout); 
+//     return result;
+// }
+
 GroupElement evalDPF_with_payload(int party, DPFKeyPack &key, GroupElement x)
 {
+    // --- 1. 初始化 ---
+    
+    // a. 定义常量，用于从128位的 AES 输出中分离出127位的种子和1位的控制位。
+    //    notOneBlock 的最低位为0，其他位为1。
     static const block notOneBlock = toBlock(~0, ~1);
+    
+    // b. 从密钥中获取输入/输出的逻辑位宽。
     int bin = key.bin;
+    int bout = key.bout;
 
-    // 初始化 s 和 t
+    // c. 从密钥中加载根种子 s_root，并根据 party ID 初始化根控制位 t_root。
+    //    这是协议的起点：双方从一个公共的随机状态（通过校正词关联）和一个
+    //    初始差异（t=0 vs t=1）开始。
     block s = _mm_loadu_si128(key.s);
-    u8 t = party;
+    u8 t = party; // party 必须是 0 或 1
 
-    // 沿树路径向下遍历
+    // --- 2. GGM 树遍历 ---
+    
+    // 循环遍历输入 x 的每一位，从最高位到最低位，模拟在GGM树中从根向叶子的移动。
     for (int i = 0; i < bin; ++i)
     {
-        // 您的实现中断言 lsb(s) 是 0，因为控制位 t 是分开存储的
-        // assert(lsb(s) == 0); 
-        
+        // a. 根据输入 x 的当前位，决定本层的路径（0=左，1=右）。
+        //    这个路径选择对于两方是相同的，因为 x 是公开的。
         const u8 x_i = static_cast<uint8_t>(x >> (bin - 1 - i)) & 1;
         
+        // b. 使用当前种子 s 作为密钥，通过 AES (模拟PRG) 生成下一层的子节点种子。
+        //    我们只需要计算所选路径上的那个子节点。
         AES ak(s);
         block ct = ak.ecbEncBlock(toBlock(0, x_i));
         
+        // c. 保存当前的 t 值，因为它决定了本层是否需要应用校正。
         u8 t_old = t;
+        
+        // d. 从 AES 输出中分离出新的种子 s_new 和新的控制位 t_new。
         s = ct & notOneBlock;
         t = lsb(ct);
 
-        if (t_old) { // 如果在特殊路径上
+        // e. 如果自己正处于“特殊路径”(t_old == 1)，则必须应用校正词(CW)
+        //    来确保在非目标路径上，双方的状态能够恢复一致。
+        if (t_old) {
+            // 应用种子校正词 (s_cw)：通过异或操作，将自己的种子修正得和对方一样。
             s = s ^ _mm_loadu_si128(key.s + i + 1);
+            
+            // 应用控制位校正词 (t_cw)：提取对应路径和层级的 t_cw 比特，并进行异或。
             t = t ^ ((key.tcw[x_i] >> (bin - 1 - i)) & 1);
         }
     }
 
-    // --- 最终份额计算 ---
-    // 这是与 evalDPF_EQ 唯一不同的地方
-
-    // 从最终的种子 s 中提取数值部分
+    // --- 3. 最终份额计算 ---
+    
+    // a. GGM树遍历结束，我们到达了叶子节点。's' 和 't' 是各自最终的状态。
+    //    从128位的最终种子 s 中提取低64位作为数值部分。
+    //    这个操作必须和 keyGenDPF 中计算 payload 的方式保持一致。
     GroupElement final_s_val = _mm_extract_epi64(s, 0);
 
-    // 根据 FSS 输出公式计算份额
+    // b. 根据标准的 FSS 输出公式计算份额。
+    //    这个计算是在 bitlength (64位) 的大环上进行的。
+    //    t 的值 (0或1) 决定了 payload 校正词是否生效。
     GroupElement result = final_s_val + key.payload * t;
     
-    // 乘以 (-1)^party
-    if (party == 1) {
-        return -result;
+    // c. 应用 (-1)^party 因子。这是为了让两方的份额在相加时能够正确抵消或组合。
+    //    对于无符号整数，取负等价于计算其在模 2^bitlength 下的加法逆元。
+    if (party == 1) { // 对应 CLIENT
+        result = -result;
     }
     
+    
+    // e. 返回这个干净的、在正确域内的最终份额。
     return result;
 }

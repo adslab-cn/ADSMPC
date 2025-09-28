@@ -129,3 +129,4 @@ void ConvTranspose3DLoopInnerClear(
     GroupElement* inputArr, 
     GroupElement* filterArr, 
     GroupElement* outArr);
+GroupElement modularInverse(GroupElement a, GroupElement m);

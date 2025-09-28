@@ -1640,7 +1640,7 @@ void evalElemWiseMul(int party, int32_t size,
                (e_public[i] * key.a[i]) + 
                key.c[i];
     }
-    GroupElement* temp = new GroupElement[size];
+   
 
     delete[] d_shares;
     delete[] e_shares;
@@ -1774,56 +1774,47 @@ void DpfRoute(
     } else { 
         DpfRouteKeyPack key;
         
-        std::cerr << "\n1\n" << std::endl;
-        std::cerr << "\n... peer->sync();  start...\n" << std::endl;
         peer->sync();
-        std::cerr << "\n... peer->sync();  end...\n" << std::endl;
-        std::cerr << "\n3\n" << std::endl;
         
         uint64_t keysize_start = dealer->bytesReceived();
-        std::cerr << "\n4\n" << std::endl;
         key = dealer->recv_dpf_route_key(size, data_bw, rank_bw);
-        std::cerr << "\n5\n" << std::endl;
         GroupElement* y_plus_r_shares = new GroupElement[size];
         GroupElement* z_mul_s_shares = new GroupElement[size];
-        std::cerr << "\n6\n" << std::endl;
 
         #pragma omp parallel for
         for (int i = 0; i < size; ++i) {
             y_plus_r_shares[i] = y_in[i] + key.r_shares[i];
         }
-        
-        
-        // GroupElement* r_temp = new GroupElement[size];
-        // memcpy(r_temp, key.r_shares, size * sizeof(GroupElement));
-        // print_array("Share 'r_share'", party, size, r_temp);
-        // reconstruct(size, r_temp, FSSConfig::bitlength);
-        // print_array("Original Plaintext 'r'", party, size, r_temp);
 
-
-        // GroupElement* yr_temp = new GroupElement[size];
-        // memcpy(yr_temp, y_plus_r_shares.data(), size * sizeof(GroupElement));
-        // print_array("Original Plaintext 'y_r_share'", party, size, yr_temp);
-        // reconstruct(size, yr_temp, FSSConfig::bitlength);
-        // print_array("Original Plaintext 'y_r'", party, size, yr_temp);
-
-        std::cerr << "\n7\n" << std::endl;
         peer->sync();
-        std::cerr << "\n7\n" << std::endl;
         ElemWiseMul(size, 
                     z_in, z_in, 
                     key.s_shares, key.s_shares,
                     z_mul_s_shares, z_mul_s_shares);
-        std::cerr << "\n8\n" << std::endl;
-        reconstruct(size, y_plus_r_shares, key.rank_bin); 
+        reconstruct(size, y_plus_r_shares, FSSConfig::bitlength); 
         GroupElement* y_hat_public = y_plus_r_shares; 
-        std::cerr << "\n9\n" << std::endl;
         reconstruct(size, z_mul_s_shares, bitlength);
         GroupElement* z_tilde_public = z_mul_s_shares;
-        print_array("Original Plaintext 'z*s'", party, size, z_tilde_public);
-        std::cerr << "\n10\n" << std::endl;
-        online_round2_compute(party, key, y_hat_public, z_tilde_public, z_out);
-        reconstruct(size, z_out, data_bw);
-        std::cerr << "\n11\n" << std::endl;
+        
+        int size = key.size;
+        int rank_bin = key.rank_bin;
+        int data_bin = key.data_bin;
+        
+        #pragma omp parallel for
+        for (int k = 0; k < size; ++k) {
+            GroupElement target_rank_k = k;
+            GroupElement result_share_k = 0;
+
+            for (int i = 0; i < size; ++i) {
+                GroupElement dpf_input = y_hat_public[i] - k;
+                mod(dpf_input, rank_bin);
+
+                GroupElement v_share_i = evalDPF_with_payload(party-2, key.routing_keys[i], dpf_input);
+                GroupElement term = z_tilde_public[i] * v_share_i;
+
+                result_share_k += term;
+            }
+            z_out[k] = result_share_k;
+        }
     }
 }

@@ -104,15 +104,12 @@ void SocketBuf::sync()
 {
     print_socket_info("sendsocket", this->sendsocket);
     print_socket_info("recvsocket", this->recvsocket);
-    char buf[1] = {1}; // 发送的同步字节为1
-    std::cerr << "\n... timeing  1...\n" << std::endl;
-    send(sendsocket, buf, 1, 0); // 发送同步信号
-    std::cerr << "\n... timeing  2...\n" << std::endl;
-    recv(recvsocket, buf, 1, MSG_WAITALL); // 阻塞直到收到1字节响应
-    std::cerr << "\n... timeing  3...\n" << std::endl;
-    bytesReceived += 1; // 更新接收字节数
-    bytesSent += 1; // 更新发送字节数
-    always_assert(buf[0] == 1); // 验证响应内容是否正确
+    char buf[1] = {1}; 
+    send(sendsocket, buf, 1, 0); 
+    recv(recvsocket, buf, 1, MSG_WAITALL);
+    bytesReceived += 1; 
+    bytesSent += 1; 
+    always_assert(buf[0] == 1); 
 }
 
 void SocketBuf::read(char *buf, int bytes)
@@ -1828,9 +1825,9 @@ size_t bw_to_bytes(int bw) {
 
 size_t get_dpf_key_pack_size_in_bytes(const DPFKeyPack& kp) {
     return (kp.bin + 1) * sizeof(osuCrypto::block) + 
-           bw_to_bytes(kp.bin) +  // tLcw
-           bw_to_bytes(kp.bin) +  // tRcw
-           bw_to_bytes(kp.bout); // payload
+           sizeof(kp.tLcw) +  // 始终传输 8 字节
+           sizeof(kp.tRcw) +  // 始终传输 8 字节
+           sizeof(kp.payload); // 始终传输 8 字节
 }
 // In aux_parameter/comms.cpp (Peer/Dealer class implementation)
 void Peer::send_elemwisemul_key(const ElemWiseMulKeyPack &k) {
@@ -1851,6 +1848,7 @@ ElemWiseMulKeyPack Dealer::recv_elemwisemul_key(int32_t size) {
     return k;
 }
 void Peer::send_dpf_route_key(const DpfRouteKeyPack &k) {
+    
     // 1. 计算总大小
     const GroupElement SENTINEL = 42;
     const size_t SENTINEL_SIZE = sizeof(GroupElement); // 8 字节
@@ -1873,16 +1871,12 @@ void Peer::send_dpf_route_key(const DpfRouteKeyPack &k) {
         size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
         memcpy(current_ptr, dpf_key.s, s_bytes);
         current_ptr += s_bytes;
-
-        size_t tcw_bytes = bw_to_bytes(dpf_key.bin);
-        memcpy(current_ptr, &dpf_key.tLcw, tcw_bytes);
-        current_ptr += tcw_bytes;
-        memcpy(current_ptr, &dpf_key.tRcw, tcw_bytes);
-        current_ptr += tcw_bytes;
-        
-        size_t payload_bytes = bw_to_bytes(dpf_key.bout);
-        memcpy(current_ptr, &dpf_key.payload, payload_bytes);
-        current_ptr += payload_bytes;
+        memcpy(current_ptr, &dpf_key.tLcw, sizeof(dpf_key.tLcw));
+        current_ptr += sizeof(dpf_key.tLcw);
+        memcpy(current_ptr, &dpf_key.tRcw, sizeof(dpf_key.tRcw));
+        current_ptr += sizeof(dpf_key.tRcw);
+        memcpy(current_ptr, &dpf_key.payload, sizeof(dpf_key.payload));
+        current_ptr += sizeof(dpf_key.payload);
     }
     
     memcpy(current_ptr, k.r_shares, r_shares_size);
@@ -1916,6 +1910,8 @@ DpfRouteKeyPack Dealer::recv_dpf_route_key(int size, int data_bin, int rank_bin)
     size_t s_shares_size = size * sizeof(GroupElement);
     size_t total_size = SENTINEL_SIZE + total_dpf_keys_size + r_shares_size + s_shares_size;
     
+
+
     char* buffer = new char[total_size];
     this->keyBuf->read(buffer, total_size);
     char* current_ptr = buffer;
@@ -1929,16 +1925,12 @@ DpfRouteKeyPack Dealer::recv_dpf_route_key(int size, int data_bin, int rank_bin)
         size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
         memcpy(dpf_key.s, current_ptr, s_bytes);
         current_ptr += s_bytes;
-        
-        size_t tcw_bytes = bw_to_bytes(dpf_key.bin);
-        memcpy(&dpf_key.tLcw, current_ptr, tcw_bytes);
-        current_ptr += tcw_bytes;
-        memcpy(&dpf_key.tRcw, current_ptr, tcw_bytes);
-        current_ptr += tcw_bytes;
-
-        size_t payload_bytes = bw_to_bytes(dpf_key.bout);
-        memcpy(&dpf_key.payload, current_ptr, payload_bytes);
-        current_ptr += payload_bytes;
+        memcpy(&dpf_key.tLcw, current_ptr, sizeof(dpf_key.tLcw));
+        current_ptr += sizeof(dpf_key.tLcw);
+        memcpy(&dpf_key.tRcw, current_ptr, sizeof(dpf_key.tRcw));
+        current_ptr += sizeof(dpf_key.tRcw);
+        memcpy(&dpf_key.payload, current_ptr, sizeof(dpf_key.payload));
+        current_ptr += sizeof(dpf_key.payload);
     }
       std::cerr << "\nend for \n" << std::endl;
     // 3.2 解析 r_shares

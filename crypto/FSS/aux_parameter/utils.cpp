@@ -642,3 +642,37 @@ void ConvTranspose3DLoopInnerClear(
         }
     }
 }
+long long extendedGcd(long long a, long long b, long long &x, long long &y) {
+    if (a == 0) {
+        x = 0;
+        y = 1;
+        return b;
+    }
+
+    long long x1, y1;
+    long long gcd = extendedGcd(b % a, a, x1, y1);
+
+    x = y1 - (b / a) * x1;
+    y = x1;
+
+    return gcd;
+}
+
+GroupElement modularInverse(GroupElement a, GroupElement m) {
+    // 将 GroupElement (通常是 unsigned) 转换为 long long 进行计算
+    long long a_ll = static_cast<long long>(a);
+    long long m_ll = static_cast<long long>(m);
+    
+    long long x, y;
+    long long g = extendedGcd(a_ll, m_ll, x, y);
+
+    // 如果 gcd(a, m) 不为 1，则逆元不存在
+    if (g != 1) {
+        throw std::runtime_error("Modular inverse does not exist");
+    }
+
+
+    long long result = (x % m_ll + m_ll) % m_ll;
+
+    return static_cast<GroupElement>(result);
+}

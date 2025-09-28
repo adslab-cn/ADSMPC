@@ -20,6 +20,17 @@ inline void mod(GroupElement &a, int bw)
         a = a & ((uint64_t(1) << bw) - 1); 
 }
 
+inline void mod_array(GroupElement *arr, int size, int bw) {
+    if (arr == nullptr || size <= 0) {
+        return;
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        mod(arr[i], bw);
+    }
+}
+
 // 生成指定位宽的随机数。
 inline GroupElement random_ge(int bw)
 {

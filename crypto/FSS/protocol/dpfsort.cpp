@@ -25,9 +25,8 @@ std::pair<DpfRouteKeyPack, DpfRouteKeyPack> keyGenDpfRoute(
         
         s_masks[i] = random_ge(data_bin);
         if (s_masks[i] == 0) s_masks[i] = 1; // 确保非零
-        
-        // 修复：调用 modularInverse
-        //s_inv_masks[i] = modularInverse(s_masks[i], data_mod);
+        s_masks[i] |= 1;
+        s_inv_masks[i] = modularInverse(s_masks[i], data_mod);
     }
 
     // 4. 生成 DPF 密钥 (并行化)
