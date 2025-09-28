@@ -98,7 +98,7 @@ void test_dpf_sort(int party) {
         reconstruct(size, z_out, data_bw); 
         //reconstruct(size, z_out, bitlength);
         mod_array(z_out,size,data_bw);
-        print_array("Original Plaintext 'z'", party, size, z_out);
+        print_array("Original Plaintext 'z'", party, size, z_out,50);
         std::cerr << "\n11\n" << std::endl;
     }
     FSS->finalize();

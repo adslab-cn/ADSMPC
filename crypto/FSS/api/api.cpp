@@ -1673,10 +1673,6 @@ void ElemWiseMul(int32_t size,
         auto key = dealer->recv_elemwisemul_key(size);
         std::cerr << "ElemWiseMul - Start Eval" << std::endl;
         evalElemWiseMul(party, size, A, B, C, key);
-        GroupElement* temp = new GroupElement[size];
-        memcpy(temp, C, size * sizeof(GroupElement));
-        reconstruct(size, temp, bitlength); // d_shares 现在是公开的 d
-        print_array("C", party, size, temp, 10);
         delete[] key.a; delete[] key.b; delete[] key.c;
     }
 }
@@ -1785,14 +1781,13 @@ void DpfRoute(
         for (int i = 0; i < size; ++i) {
             y_plus_r_shares[i] = y_in[i] + key.r_shares[i];
         }
+        reconstruct(size, y_plus_r_shares, FSSConfig::bitlength); 
+        GroupElement* y_hat_public = y_plus_r_shares; 
 
-        peer->sync();
         ElemWiseMul(size, 
                     z_in, z_in, 
                     key.s_shares, key.s_shares,
                     z_mul_s_shares, z_mul_s_shares);
-        reconstruct(size, y_plus_r_shares, FSSConfig::bitlength); 
-        GroupElement* y_hat_public = y_plus_r_shares; 
         reconstruct(size, z_mul_s_shares, bitlength);
         GroupElement* z_tilde_public = z_mul_s_shares;
         
@@ -1816,5 +1811,6 @@ void DpfRoute(
             }
             z_out[k] = result_share_k;
         }
+        mod_array(z_out, size, data_bw);
     }
 }
