@@ -1619,13 +1619,12 @@ void evalElemWiseMul(int party, int32_t size,
     // 注意: reconstruct 会修改传入的数组，所以我们用 d_shares 的副本来重构 e
     GroupElement* e_reconstruct_buffer = new GroupElement[size];
     memcpy(e_reconstruct_buffer, e_shares, size * sizeof(GroupElement));
+
+
     
     reconstruct(size, d_shares, bitlength); // d_shares 现在是公开的 d
-    print_array("ElemWiseMul - d (x - a)", party, size, d_shares, 10);
     reconstruct(size, e_reconstruct_buffer, bitlength); // e_reconstruct_buffer 现在是公开的 e
-    
 
-    print_array("ElemWiseMul - e (y - b)", party, size, e_reconstruct_buffer, 10);
 
     GroupElement* d_public = d_shares;
     GroupElement* e_public = e_reconstruct_buffer;
@@ -1641,6 +1640,7 @@ void evalElemWiseMul(int party, int32_t size,
                (e_public[i] * key.a[i]) + 
                key.c[i];
     }
+    GroupElement* temp = new GroupElement[size];
 
     delete[] d_shares;
     delete[] e_shares;
@@ -1673,6 +1673,10 @@ void ElemWiseMul(int32_t size,
         auto key = dealer->recv_elemwisemul_key(size);
         std::cerr << "ElemWiseMul - Start Eval" << std::endl;
         evalElemWiseMul(party, size, A, B, C, key);
+        GroupElement* temp = new GroupElement[size];
+        memcpy(temp, C, size * sizeof(GroupElement));
+        reconstruct(size, temp, bitlength); // d_shares 现在是公开的 d
+        print_array("C", party, size, temp, 10);
         delete[] key.a; delete[] key.b; delete[] key.c;
     }
 }
@@ -1741,6 +1745,14 @@ void DpfRoute(
         print_array("Original Plaintext 'r'", party, size, r);
         print_array("Share 'r_1'", party, size, keys.first.r_shares);
         print_array("SHare 'r_2'", party, size, keys.second.r_shares);
+        GroupElement* s = new GroupElement[size];
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            s[i] = keys.first.s_shares[i] + keys.second.s_shares[i];
+        }
+        print_array("Original Plaintext 's'", party, size, s);
+        print_array("Share 's_1'", party, size, keys.first.s_shares);
+        print_array("SHare 's_2'", party, size, keys.second.s_shares);
         GroupElement* s_shares_complete = new GroupElement[size];
         #pragma omp parallel for
         for (int i = 0; i < size; ++i) {
@@ -1772,8 +1784,8 @@ void DpfRoute(
         std::cerr << "\n4\n" << std::endl;
         key = dealer->recv_dpf_route_key(size, data_bw, rank_bw);
         std::cerr << "\n5\n" << std::endl;
-        std::vector<GroupElement> y_plus_r_shares(size);
-        std::vector<GroupElement> z_mul_s_shares(size);
+        GroupElement* y_plus_r_shares = new GroupElement[size];
+        GroupElement* z_mul_s_shares = new GroupElement[size];
         std::cerr << "\n6\n" << std::endl;
 
         #pragma omp parallel for
@@ -1801,13 +1813,14 @@ void DpfRoute(
         ElemWiseMul(size, 
                     z_in, z_in, 
                     key.s_shares, key.s_shares,
-                    z_mul_s_shares.data(), z_mul_s_shares.data());
+                    z_mul_s_shares, z_mul_s_shares);
         std::cerr << "\n8\n" << std::endl;
-        reconstruct(size, y_plus_r_shares.data(), key.rank_bin); 
-        GroupElement* y_hat_public = y_plus_r_shares.data(); 
+        reconstruct(size, y_plus_r_shares, key.rank_bin); 
+        GroupElement* y_hat_public = y_plus_r_shares; 
         std::cerr << "\n9\n" << std::endl;
-        reconstruct(size, z_mul_s_shares.data(), key.data_bin);
-        GroupElement* z_tilde_public = z_mul_s_shares.data();
+        reconstruct(size, z_mul_s_shares, bitlength);
+        GroupElement* z_tilde_public = z_mul_s_shares;
+        print_array("Original Plaintext 'z*s'", party, size, z_tilde_public);
         std::cerr << "\n10\n" << std::endl;
         online_round2_compute(party, key, y_hat_public, z_tilde_public, z_out);
         reconstruct(size, z_out, data_bw);
