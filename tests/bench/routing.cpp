@@ -17,6 +17,8 @@ CNN训练
 #include <random>
 #include <algorithm>
 #include "../../crypto/FSS/api/api.h"
+#include <chrono> // 1. 包含 chrono 头文件
+
 // =================================================================
 //                 DPF SORTING PROTOCOL TEST
 // =================================================================
@@ -34,8 +36,8 @@ void test_dpf_sort(int party) {
     std::string ip = "127.0.0.1";
     FSS->init(ip, true);
 
-    const int size = 100;
-    const int rank_bw = 7; 
+    const int size = 1;
+    const int rank_bw = 14; 
     const int data_bw = 32;
 
     // --- 3. 准备明文和份额数组 ---
@@ -51,7 +53,7 @@ void test_dpf_sort(int party) {
         std::shuffle(p.begin(), p.end(), g);
         for(int i=0; i<size; ++i) {
             y_in_plain[i] = p[i];
-            z_in_plain[i] = 1000 + p[i];
+            z_in_plain[i] = 10000 + p[i];
         }
     }
     print_array("Original Plaintext 'y_in'", party, size, y_in_plain);
@@ -111,11 +113,29 @@ void fptraining_init() {
 }
 
 int main(int argc, char** argv) {
+    // 2. 记录开始时间
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     fptraining_init();
     int party = 0;
     if (argc > 1) {
         party = atoi(argv[1]);
     }
     test_dpf_sort(party);
+
+    // 3. 记录结束时间
+    auto end_time = std::chrono::high_resolution_clock::now();
+
+    // 4. 计算时间差并打印
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    // 为了防止多个参与方都打印时间，可以只让一个 party (例如 party 0) 打印
+    if (party == 2) {
+        std::cout << "================================================" << std::endl;
+        std::cout << "Total execution time: " << duration.count() << " milliseconds" << std::endl;
+        std::cout << "Total execution time: " << duration.count() / 1000.0 << " seconds" << std::endl;
+        std::cout << "================================================" << std::endl;
+    }
+
     return 0;
 }

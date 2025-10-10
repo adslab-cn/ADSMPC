@@ -1761,7 +1761,7 @@ void DpfRoute(
 
         ElemWiseMul(size, 
                     z_in_mask, z_in_mask, 
-                    s_shares_complete, s_shares_complete, 
+                    s_shares_complete, s_sohares_complete, 
                     z_tilde_mask, z_tilde_mask); 
 
         delete[] s_shares_complete;
@@ -1783,18 +1783,19 @@ void DpfRoute(
         }
         reconstruct(size, y_plus_r_shares, FSSConfig::bitlength); 
         GroupElement* y_hat_public = y_plus_r_shares; 
-
+        
         ElemWiseMul(size, 
                     z_in, z_in, 
                     key.s_shares, key.s_shares,
                     z_mul_s_shares, z_mul_s_shares);
+
         reconstruct(size, z_mul_s_shares, bitlength);
         GroupElement* z_tilde_public = z_mul_s_shares;
         
         int size = key.size;
         int rank_bin = key.rank_bin;
         int data_bin = key.data_bin;
-        
+        auto start_time = std::chrono::high_resolution_clock::now();
         #pragma omp parallel for
         for (int k = 0; k < size; ++k) {
             GroupElement target_rank_k = k;
@@ -1810,6 +1811,19 @@ void DpfRoute(
                 result_share_k += term;
             }
             z_out[k] = result_share_k;
+        }
+                    // 3. 记录结束时间
+        auto end_time = std::chrono::high_resolution_clock::now();
+
+        // 4. 计算时间差并打印
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        
+        // 为了防止多个参与方都打印时间，可以只让一个 party (例如 party 0) 打印
+        if (party == 2) {
+            std::cout << "================================================" << std::endl;
+            std::cout << "Total execution time: " << duration.count() << " milliseconds" << std::endl;
+            std::cout << "Total execution time: " << duration.count() / 1000.0 << " seconds" << std::endl;
+            std::cout << "================================================" << std::endl;
         }
         mod_array(z_out, size, data_bw);
     }
