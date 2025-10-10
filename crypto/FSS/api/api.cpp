@@ -1832,20 +1832,19 @@ void DpfRoute(
 
 std::pair<GraphUpdateKeyPack,GraphUpdateKeyPack> keyGenForUpdate(
     const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
-    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw,
-    int data_bw
+    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw
 ) {
     int n = A_old.size();    // 节点数量
     int c = F_old[0].size(); // 特征维度
-    std::vector<std::vector<DPFKeyPack>> keys_A_p0(n), keys_A_p1(n);
-    std::vector<std::vector<DPFKeyPack>> keys_F_p0(c), keys_F_p1(c);
+    GraphUpdateKeyPack k0(A_bw,F_bw,A_data_bw,F_data_bw);
+    GraphUpdateKeyPack k1(A_bw,F_bw,A_data_bw,F_data_bw);
     for(int v_star = 0; v_star < n; v_star++){
         for (int i = 0; i < n; ++i) {
             GroupElement delta = A_new[v_star][i] - A_old[v_star][i];
             
             auto key_pair = keyGenDPF(A_bw, A_data_bw, v_star, delta);
-            keys_A_p0[v_star][i] = key_pair.first;
-            keys_A_p1[v_star][i] = key_pair.second;
+            k0.keys_A[v_star][i] = key_pair.first;
+            k1.keys_A[v_star][i] = key_pair.second;
         }
 
         for (int i = 0; i < c; ++i) {
@@ -1854,16 +1853,12 @@ std::pair<GraphUpdateKeyPack,GraphUpdateKeyPack> keyGenForUpdate(
             //int bin_F = static_cast<int>(ceil(log2(n))); // 同样是节点索引的位宽
 
             auto key_pair = keyGenDPF(F_bw, F_data_bw, v_star, delta);
-            keys_F_p0[v_star][i] = key_pair.first;
-            keys_F_p1[v_star][i] = key_pair.second;
+            k0.keys_F[v_star][i] = key_pair.first;
+            k1.keys_F[v_star][i] = key_pair.second;
         }
     }
 
-    // 返回两组密钥，一组给 party 0, 一组给 party 1
-    // 实际实现中，这里会通过网络发送
-    // 这里我们返回密钥份额的集合
-    // 注意：原文 party 是 0 和 1，你的代码是 SERVER 和 CLIENT，需要对应
-    return  std::make_pair(keys_A_p0, keys_F_p0); 
+    return  std::make_pair(k0, k1); 
 }
 
 void obliviousUpdate(

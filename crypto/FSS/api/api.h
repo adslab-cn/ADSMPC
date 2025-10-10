@@ -105,11 +105,9 @@ void DpfRoute(
 void prng_shared_init();
 void print_array(const std::string& title, int party, int size, const GroupElement* arr, int limit = 10);
 void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share_out, int owner);
-std::pair<std::vector<DPFKeyPack>, std::vector<DPFKeyPack>> 
-keyGenForUpdate(
-    int target_node_v_star,
-    const Matrix& A_old, const Matrix& A_new,
-    const Matrix& F_old, const Matrix& F_new
+std::pair<GraphUpdateKeyPack,GraphUpdateKeyPack> keyGenForUpdate(
+    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
+    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw
 );
 // 服务器调用的函数
 void obliviousUpdate(
