@@ -483,3 +483,9 @@ struct ElemWiseMulKeyPack {
     int32_t size;
     GroupElement *a, *b, *c;
 };
+
+struct GraphUpdateKeyPack {
+    int A_bw, F_bw, A_data_bw, F_data_bw;
+    std::vector<std::vector<DPFKeyPack>> keys_A;
+    std::vector<std::vector<DPFKeyPack>> keys_F;
+};

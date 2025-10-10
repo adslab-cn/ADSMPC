@@ -33,6 +33,7 @@
 #include <Eigen/Dense>
 #include <bitpack/bitpack.h>
 
+using Matrix = std::vector<std::vector<GroupElement>>; 
 
 template <typename T>
 using pair = std::pair<T, T>;
@@ -1826,5 +1827,89 @@ void DpfRoute(
             std::cout << "================================================" << std::endl;
         }
         mod_array(z_out, size, data_bw);
+    }
+}
+
+std::pair<GraphUpdateKeyPack,GraphUpdateKeyPack> keyGenForUpdate(
+    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
+    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw,
+    int data_bw
+) {
+    int n = A_old.size();    // 节点数量
+    int c = F_old[0].size(); // 特征维度
+    std::vector<std::vector<DPFKeyPack>> keys_A_p0(n), keys_A_p1(n);
+    std::vector<std::vector<DPFKeyPack>> keys_F_p0(c), keys_F_p1(c);
+    for(int v_star = 0; v_star < n; v_star++){
+        for (int i = 0; i < n; ++i) {
+            GroupElement delta = A_new[v_star][i] - A_old[v_star][i];
+            
+            auto key_pair = keyGenDPF(A_bw, A_data_bw, v_star, delta);
+            keys_A_p0[v_star][i] = key_pair.first;
+            keys_A_p1[v_star][i] = key_pair.second;
+        }
+
+        for (int i = 0; i < c; ++i) {
+            GroupElement delta = F_new[v_star][i] - F_old[v_star][i];
+            
+            //int bin_F = static_cast<int>(ceil(log2(n))); // 同样是节点索引的位宽
+
+            auto key_pair = keyGenDPF(F_bw, F_data_bw, v_star, delta);
+            keys_F_p0[v_star][i] = key_pair.first;
+            keys_F_p1[v_star][i] = key_pair.second;
+        }
+    }
+
+    // 返回两组密钥，一组给 party 0, 一组给 party 1
+    // 实际实现中，这里会通过网络发送
+    // 这里我们返回密钥份额的集合
+    // 注意：原文 party 是 0 和 1，你的代码是 SERVER 和 CLIENT，需要对应
+    return  std::make_pair(keys_A_p0, keys_F_p0); 
+}
+
+void obliviousUpdate(
+    int party,
+    Matrix& A_share,
+    Matrix& F_share,
+    const std::vector<DPFKeyPack>& keys_A,
+    const std::vector<DPFKeyPack>& keys_F
+) {
+    int n = A_share.size();
+    int c = F_share[0].size();
+    
+    // 注意: 你的代码中 party 可能是 SERVER (2) 和 CLIENT (3), 
+    // 而 evalAll 需要 0 或 1。需要转换。
+    int dpf_party = (party == SERVER) ? 0 : 1;
+
+    // --- 1. 更新邻接矩阵份额 ---
+    // 外循环：遍历所有“列” i
+    #pragma omp parallel for
+    for (int i = 0; i < n; ++i) {
+        // 创建一个临时数组来存储整列的差值份额
+        std::vector<GroupElement> delta_column_share(n, 0);
+
+        // 调用一次 evalAll，获取第 i 列上所有行的差值份额
+        // evalAll(party, key, rightShift, out)
+        // 这里的 rightShift (右移) 通常是0，除非有特殊需求
+        evalAll(dpf_party, keys_A[i], 0, delta_column_share.data());
+
+        // 将整个差值列向量的份额，加到矩阵份额的第 i 列上
+        for (int j = 0; j < n; ++j) {
+            A_share[j][i] += delta_column_share[j];
+        }
+    }
+
+    // --- 2. 更新特征矩阵份额 ---
+    // 外循环：遍历所有“特征维度” i
+    #pragma omp parallel for
+    for (int i = 0; i < c; ++i) {
+        std::vector<GroupElement> delta_column_share(n, 0);
+
+        // 同样，调用一次 evalAll 来获取差值
+        evalAll(dpf_party, keys_F[i], 0, delta_column_share.data());
+
+        // 将差值应用到特征矩阵的第 i 列
+        for (int j = 0; j < n; ++j) {
+            F_share[j][i] += delta_column_share[j];
+        }
     }
 }
