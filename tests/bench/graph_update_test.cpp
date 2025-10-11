@@ -152,8 +152,8 @@ void test_graph_update(int party) {
     secretShareMatrix(A_old, A_share, SERVER);
     secretShareMatrix(F_old, F_share, SERVER);
 
-    A_temp = A_new;
-    F_temp = F_new;
+    A_temp = A_old;
+    F_temp = F_old;
     reconstructMatrix(A_temp);
     reconstructMatrix(F_temp);
     if (party == SERVER) {
@@ -161,8 +161,8 @@ void test_graph_update(int party) {
         printMatrix("F_old (Plaintext)", F_old);
         printMatrix("A_new (Target)", A_new);
         printMatrix("F_new (Target)", F_new);
-        printMatrix("A_new (Reconstructed)", A_new);
-        printMatrix("F_new (Reconstructed)", F_new);
+        printMatrix("A_old (Reconstructed)", A_temp);
+        printMatrix("F_old (Reconstructed)", F_temp);
     }
     
     // --- 5. 执行协议并计时 ---
