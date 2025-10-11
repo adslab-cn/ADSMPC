@@ -5,7 +5,7 @@
 #include "../aux_parameter/group_element.h"
 
 #define MASK_PAIR(x) x, x##_mask
-
+using Matrix = std::vector<std::vector<GroupElement>>; 
 /* 
     测试调用方式
     FSS::start();  // 初始化通信、同步、计时器
@@ -105,14 +105,13 @@ void DpfRoute(
 void prng_shared_init();
 void print_array(const std::string& title, int party, int size, const GroupElement* arr, int limit = 10);
 void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share_out, int owner);
-std::pair<GraphUpdateKeyPack,GraphUpdateKeyPack> keyGenForUpdate(
-    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
-    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw
-);
-// 服务器调用的函数
-void obliviousUpdate(
+void obliviousGraphUpdate(
     int party,
-    Matrix& A_share, Matrix& F_share,
-    const std::vector<DPFKeyPack>& keys_A,
-    const std::vector<DPFKeyPack>& keys_F
+    int target_node_v_star,
+    // 明文数据只在 Dealer 端需要，Server/Client 端可以传入空矩阵
+    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
+    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw,
+    // 份额数据只在 Server/Client 端需要
+    Matrix& A_share,
+    Matrix& F_share
 );

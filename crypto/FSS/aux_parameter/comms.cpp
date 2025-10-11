@@ -1949,3 +1949,137 @@ void Peer::recv_ge_array(GroupElement *arr, int size)
     int bitlength = sizeof(GroupElement) * 8; 
     recv_batched_input(arr, size, bitlength);
 }
+
+void Peer::send_graph_update_key(const GraphUpdateKeyPack &k) {
+    size_t total_size = 0;
+    const GroupElement SENTINEL = 42;
+    const size_t SENTINEL_SIZE = sizeof(GroupElement);
+    total_size +=  SENTINEL_SIZE + sizeof(k.n) + sizeof(k.c) + sizeof(k.A_bw) + sizeof(k.A_data_bw) + sizeof(k.F_bw) + sizeof(k.F_data_bw);
+    
+    size_t keys_A_size = 0;
+    for (int i = 0; i < k.n; ++i) {
+        keys_A_size += get_dpf_key_pack_size_in_bytes(k.keys_A[i]);
+    }
+    total_size += keys_A_size;
+
+    size_t keys_F_size = 0;
+    for (int i = 0; i < k.c; ++i) {
+        keys_F_size += get_dpf_key_pack_size_in_bytes(k.keys_F[i]);
+    }
+    total_size += keys_F_size;
+
+    char* buffer = new char[total_size];
+    char* current_ptr = buffer;
+    memcpy(current_ptr, &SENTINEL, SENTINEL_SIZE);current_ptr += SENTINEL_SIZE;
+    memcpy(current_ptr, &k.n, sizeof(k.n)); current_ptr += sizeof(k.n);
+    memcpy(current_ptr, &k.c, sizeof(k.c)); current_ptr += sizeof(k.c);
+    memcpy(current_ptr, &k.A_bw, sizeof(k.A_bw)); current_ptr += sizeof(k.A_bw);
+    memcpy(current_ptr, &k.A_data_bw, sizeof(k.A_data_bw)); current_ptr += sizeof(k.A_data_bw);
+    memcpy(current_ptr, &k.F_bw, sizeof(k.F_bw)); current_ptr += sizeof(k.F_bw);
+    memcpy(current_ptr, &k.F_data_bw, sizeof(k.F_data_bw)); current_ptr += sizeof(k.F_data_bw);
+
+    for (int i = 0; i < k.n; ++i) {
+        const DPFKeyPack& dpf_key = k.keys_A[i];
+        size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
+        
+        memcpy(current_ptr, dpf_key.s, s_bytes); current_ptr += s_bytes;
+        memcpy(current_ptr, &dpf_key.tLcw, sizeof(dpf_key.tLcw)); current_ptr += sizeof(dpf_key.tLcw);
+        memcpy(current_ptr, &dpf_key.tRcw, sizeof(dpf_key.tRcw)); current_ptr += sizeof(dpf_key.tRcw);
+        memcpy(current_ptr, &dpf_key.payload, sizeof(dpf_key.payload)); current_ptr += sizeof(dpf_key.payload);
+    }
+
+    for (int i = 0; i < k.c; ++i) {
+        const DPFKeyPack& dpf_key = k.keys_F[i];
+        size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
+
+        memcpy(current_ptr, dpf_key.s, s_bytes); current_ptr += s_bytes;
+        memcpy(current_ptr, &dpf_key.tLcw, sizeof(dpf_key.tLcw)); current_ptr += sizeof(dpf_key.tLcw);
+        memcpy(current_ptr, &dpf_key.tRcw, sizeof(dpf_key.tRcw)); current_ptr += sizeof(dpf_key.tRcw);
+        memcpy(current_ptr, &dpf_key.payload, sizeof(dpf_key.payload)); current_ptr += sizeof(dpf_key.payload);
+    }
+    
+    this->keyBuf->write(buffer, total_size);
+
+    delete[] buffer;
+}
+
+GraphUpdateKeyPack Dealer::recv_graph_update_key() {
+    const GroupElement EXPECTED_SENTINEL = 42;
+    GroupElement received_sentinel;
+    
+    this->keyBuf->read((char*)&received_sentinel, sizeof(GroupElement));
+    
+    always_assert(received_sentinel == EXPECTED_SENTINEL);
+
+    int n, c, A_bw, A_data_bw, F_bw, F_data_bw;
+    this->keyBuf->read((char*)&n, sizeof(int));
+    this->keyBuf->read((char*)&c, sizeof(int));
+    this->keyBuf->read((char*)&A_bw, sizeof(int));
+    this->keyBuf->read((char*)&A_data_bw, sizeof(int));
+    this->keyBuf->read((char*)&F_bw, sizeof(int));
+    this->keyBuf->read((char*)&F_data_bw, sizeof(int));
+
+    GraphUpdateKeyPack k(n, c, A_bw, F_bw, A_data_bw, F_data_bw);
+
+    size_t keys_A_size = 0;
+    for (int i = 0; i < n; ++i) {
+        k.keys_A[i].bin = A_bw;
+        k.keys_A[i].bout = A_data_bw;
+        keys_A_size += get_dpf_key_pack_size_in_bytes(k.keys_A[i]);
+    }
+
+    size_t keys_F_size = 0;
+    for (int i = 0; i < c; ++i) {
+        k.keys_F[i].bin = F_bw;
+        k.keys_F[i].bout = F_data_bw;
+        keys_F_size += get_dpf_key_pack_size_in_bytes(k.keys_F[i]);
+    }
+    
+    size_t remaining_size = keys_A_size + keys_F_size;
+
+    char* buffer = new char[remaining_size];
+    this->keyBuf->read(buffer, remaining_size);
+    
+    char* current_ptr = buffer;
+
+    for (int i = 0; i < n; ++i) {
+        DPFKeyPack& dpf_key = k.keys_A[i];
+        
+        dpf_key.s = new osuCrypto::block[dpf_key.bin + 1];
+        size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
+        
+        memcpy(dpf_key.s, current_ptr, s_bytes); 
+        current_ptr += s_bytes;
+        
+        memcpy(&dpf_key.tLcw, current_ptr, sizeof(dpf_key.tLcw)); 
+        current_ptr += sizeof(dpf_key.tLcw);
+        
+        memcpy(&dpf_key.tRcw, current_ptr, sizeof(dpf_key.tRcw)); 
+        current_ptr += sizeof(dpf_key.tRcw);
+        
+        memcpy(&dpf_key.payload, current_ptr, sizeof(dpf_key.payload)); 
+        current_ptr += sizeof(dpf_key.payload);
+    }
+
+    for (int i = 0; i < c; ++i) {
+        DPFKeyPack& dpf_key = k.keys_F[i];
+        
+        dpf_key.s = new osuCrypto::block[dpf_key.bin + 1];
+        size_t s_bytes = (dpf_key.bin + 1) * sizeof(osuCrypto::block);
+
+        memcpy(dpf_key.s, current_ptr, s_bytes); 
+        current_ptr += s_bytes;
+
+        memcpy(&dpf_key.tLcw, current_ptr, sizeof(dpf_key.tLcw)); 
+        current_ptr += sizeof(dpf_key.tLcw);
+
+        memcpy(&dpf_key.tRcw, current_ptr, sizeof(dpf_key.tRcw)); 
+        current_ptr += sizeof(dpf_key.tRcw);
+
+        memcpy(&dpf_key.payload, current_ptr, sizeof(dpf_key.payload)); 
+        current_ptr += sizeof(dpf_key.payload);
+    }
+    
+    delete[] buffer;
+    return k;
+}

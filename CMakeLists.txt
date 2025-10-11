@@ -111,3 +111,8 @@ add_executable(test_route
     tests/bench/routing.cpp
 )
 target_link_libraries (test_route ${PROJECT_NAME})
+
+add_executable(test_graph_update
+    tests/bench/graph_update_test.cpp
+)
+target_link_libraries (test_graph_update ${PROJECT_NAME})

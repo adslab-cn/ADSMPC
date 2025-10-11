@@ -24,6 +24,7 @@
 // #include "../protocol/taylor.h"
 #include "../protocol/float.h"
 #include "../protocol/dpfsort.h"
+#include "../protocol/graphupdate.h"
 
 #include <cassert>
 #include <iostream>
@@ -33,7 +34,7 @@
 #include <Eigen/Dense>
 #include <bitpack/bitpack.h>
 
-using Matrix = std::vector<std::vector<GroupElement>>; 
+
 
 template <typename T>
 using pair = std::pair<T, T>;
@@ -1762,7 +1763,7 @@ void DpfRoute(
 
         ElemWiseMul(size, 
                     z_in_mask, z_in_mask, 
-                    s_shares_complete, s_sohares_complete, 
+                    s_shares_complete, s_shares_complete, 
                     z_tilde_mask, z_tilde_mask); 
 
         delete[] s_shares_complete;
@@ -1830,81 +1831,47 @@ void DpfRoute(
     }
 }
 
-std::pair<GraphUpdateKeyPack,GraphUpdateKeyPack> keyGenForUpdate(
-    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
-    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw
-) {
-    int n = A_old.size();    // 节点数量
-    int c = F_old[0].size(); // 特征维度
-    GraphUpdateKeyPack k0(A_bw,F_bw,A_data_bw,F_data_bw);
-    GraphUpdateKeyPack k1(A_bw,F_bw,A_data_bw,F_data_bw);
-    for(int v_star = 0; v_star < n; v_star++){
-        for (int i = 0; i < n; ++i) {
-            GroupElement delta = A_new[v_star][i] - A_old[v_star][i];
-            
-            auto key_pair = keyGenDPF(A_bw, A_data_bw, v_star, delta);
-            k0.keys_A[v_star][i] = key_pair.first;
-            k1.keys_A[v_star][i] = key_pair.second;
-        }
-
-        for (int i = 0; i < c; ++i) {
-            GroupElement delta = F_new[v_star][i] - F_old[v_star][i];
-            
-            //int bin_F = static_cast<int>(ceil(log2(n))); // 同样是节点索引的位宽
-
-            auto key_pair = keyGenDPF(F_bw, F_data_bw, v_star, delta);
-            k0.keys_F[v_star][i] = key_pair.first;
-            k1.keys_F[v_star][i] = key_pair.second;
-        }
-    }
-
-    return  std::make_pair(k0, k1); 
-}
-
-void obliviousUpdate(
+void obliviousGraphUpdate(
     int party,
+    int target_node_v_star,
+    // 明文数据只在 Dealer 端需要，Server/Client 端可以传入空矩阵
+    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
+    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw,
+    // 份额数据只在 Server/Client 端需要
     Matrix& A_share,
-    Matrix& F_share,
-    const std::vector<DPFKeyPack>& keys_A,
-    const std::vector<DPFKeyPack>& keys_F
+    Matrix& F_share
 ) {
-    int n = A_share.size();
-    int c = F_share[0].size();
-    
-    // 注意: 你的代码中 party 可能是 SERVER (2) 和 CLIENT (3), 
-    // 而 evalAll 需要 0 或 1。需要转换。
-    int dpf_party = (party == SERVER) ? 0 : 1;
+    if (party == DEALER) {
+        std::cout << "[Dealer] Generating and sending graph update keys..." << std::endl;
+        
+        // 1. 调用 keyGen 生成两方的密钥包
+        auto key_pair = keyGenForGraphUpdate(
+            target_node_v_star,
+            A_old, A_new, A_bw, A_data_bw,
+            F_old, F_new, F_bw, F_data_bw
+        );
+        
+        server->send_graph_update_key(key_pair.first);
+        client->send_graph_update_key(key_pair.second);
 
-    // --- 1. 更新邻接矩阵份额 ---
-    // 外循环：遍历所有“列” i
-    #pragma omp parallel for
-    for (int i = 0; i < n; ++i) {
-        // 创建一个临时数组来存储整列的差值份额
-        std::vector<GroupElement> delta_column_share(n, 0);
+        std::cout << "[Dealer] Keys sent." << std::endl;
 
-        // 调用一次 evalAll，获取第 i 列上所有行的差值份额
-        // evalAll(party, key, rightShift, out)
-        // 这里的 rightShift (右移) 通常是0，除非有特殊需求
-        evalAll(dpf_party, keys_A[i], 0, delta_column_share.data());
+    } else {
+        std::cout << "[Party " << party << "] Receiving graph update keys..." << std::endl;
 
-        // 将整个差值列向量的份额，加到矩阵份额的第 i 列上
-        for (int j = 0; j < n; ++j) {
-            A_share[j][i] += delta_column_share[j];
-        }
-    }
 
-    // --- 2. 更新特征矩阵份额 ---
-    // 外循环：遍历所有“特征维度” i
-    #pragma omp parallel for
-    for (int i = 0; i < c; ++i) {
-        std::vector<GroupElement> delta_column_share(n, 0);
+        GraphUpdateKeyPack key = dealer->recv_graph_update_key();
 
-        // 同样，调用一次 evalAll 来获取差值
-        evalAll(dpf_party, keys_F[i], 0, delta_column_share.data());
+        std::cout << "[Party " << party << "] Keys received. Synchronizing with peer..." << std::endl;
 
-        // 将差值应用到特征矩阵的第 i 列
-        for (int j = 0; j < n; ++j) {
-            F_share[j][i] += delta_column_share[j];
-        }
+        // 2. 与另一个计算方同步，确保双方都收到了密钥再开始计算
+        peer->sync();
+
+        std::cout << "[Party " << party << "] Starting oblivious update computation..." << std::endl;
+
+        // 3. 执行不经意更新的计算部分
+        obliviousUpdate(party, A_share, F_share, key.keys_A,key.keys_F);
+
+        std::cout << "[Party " << party << "] Oblivious update computation finished." << std::endl;
     }
 }

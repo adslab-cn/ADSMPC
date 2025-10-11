@@ -57,6 +57,7 @@ add_library(${PROJECT_NAME}
     # protocol/taylor.cpp
     # protocol/truncate.cpp
     protocol/dpfsort.cpp
+    protocol/graphupdate.cpp
 )
 
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads cryptoTools bitpack)

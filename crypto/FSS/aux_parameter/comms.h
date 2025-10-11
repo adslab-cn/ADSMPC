@@ -319,6 +319,8 @@ public:
     void recv_batched_input(uint64_t *g, int size, int bw);
 
     void send_dpf_route_key(const DpfRouteKeyPack &k);
+    
+    void send_graph_update_key(const GraphUpdateKeyPack &k);
 
     void send_elemwisemul_key(const ElemWiseMulKeyPack &k);
 
@@ -465,6 +467,7 @@ public:
 
     DpfRouteKeyPack recv_dpf_route_key(int size, int data_bin, int rank_bin);
 
+    GraphUpdateKeyPack recv_graph_update_key();
+
     ElemWiseMulKeyPack recv_elemwisemul_key(int32_t size);
 };
-
