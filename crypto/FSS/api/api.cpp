@@ -1873,5 +1873,6 @@ void obliviousGraphUpdate(
         obliviousUpdate(party, A_share, F_share, key.keys_A,key.keys_F);
 
         std::cout << "[Party " << party << "] Oblivious update computation finished." << std::endl;
+        peer->sync();
     }
 }

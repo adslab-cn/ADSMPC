@@ -114,13 +114,13 @@ void test_graph_update(int party) {
     FSS->init("127.0.0.1", true); // true 表示使用内存IO
 
     // --- 2. 定义图的尺寸和参数 ---
-    const int N = 128;
-    const int C = 64;
+    const int N = 10;
+    const int C = 7;
     const int A_bw = static_cast<int>(ceil(log2(N)));
     const int F_bw = A_bw;
     const int A_data_bw = 64;
     const int F_data_bw = 64;
-    int target_node_to_update = 5;
+    int target_node_to_update = 1;
 
     // --- 3. 准备数据 ---
     Matrix A_old(N, std::vector<GroupElement>(N, 0));
@@ -142,7 +142,7 @@ void test_graph_update(int party) {
         }
         A_new = A_old; F_new = F_old;
         A_new[target_node_to_update][(target_node_to_update + 1) % N] = 0;
-        A_new[target_node_to_update][10] = 1;
+        A_new[target_node_to_update][0] = 1;
         F_new[target_node_to_update][0] = 999;
     }
 
@@ -167,7 +167,7 @@ void test_graph_update(int party) {
     
     // --- 5. 执行协议并计时 ---
     FSS::start(); // 开始计时和通信统计
-
+    auto start_time = std::chrono::high_resolution_clock::now();
     obliviousGraphUpdate(
         party, target_node_to_update,
         A_old, A_new, A_bw, A_data_bw,
@@ -175,7 +175,7 @@ void test_graph_update(int party) {
         A_share, F_share
     );
 
-    FSS::end(); // 结束计时和通信统计
+
 
     // --- 6. 验证结果 ---
     if (party != DEALER) {
@@ -190,7 +190,7 @@ void test_graph_update(int party) {
             bool success = true;
             // 检查被修改的点
             if (A_share[target_node_to_update][(target_node_to_update + 1) % N] != 0) success = false;
-            if (A_share[target_node_to_update][10] != 1) success = false;
+            if (A_share[target_node_to_update][0] != 1) success = false;
             if (F_share[target_node_to_update][0] != 999) success = false;
             
             // 检查一个未被修改的点，确保它保持原样
@@ -205,8 +205,22 @@ void test_graph_update(int party) {
             printMatrix("F_new (Result)", F_share);
         }
     }
+    //FSS::end(); // 结束计时和通信统计
+    if (party == DEALER) {
+        FSS->finalize();
+    }
+    auto end_time = std::chrono::high_resolution_clock::now();
+
+    // 4. 计算时间差并打印
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
     
-    FSS->finalize();
+    // 为了防止多个参与方都打印时间，可以只让一个 party (例如 party 0) 打印
+    if (party == 2) {
+        std::cout << "================================================" << std::endl;
+        std::cout << "Total execution time: " << duration.count() << " milliseconds" << std::endl;
+        std::cout << "Total execution time: " << duration.count() / 1000.0 << " seconds" << std::endl;
+        std::cout << "================================================" << std::endl;
+    }
     std::cerr << ">> Graph Update Protocol Test - End (Party " << party << ")" << std::endl;
 }
 void fptraining_init() {

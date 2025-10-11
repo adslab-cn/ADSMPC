@@ -30,7 +30,7 @@ void test_dpf_sort(int party) {
     // --- 1. 初始化 FSS 后端 ---
     using FSSVersion = FSSExtended<u64>;
     FSSVersion *FSS = new FSSVersion();
-    FSSConfig::bitlength = 64;
+    FSSConfig::bitlength = 127;
     FSSConfig::party = party;
     FSSConfig::num_threads = 4;
     std::string ip = "127.0.0.1";

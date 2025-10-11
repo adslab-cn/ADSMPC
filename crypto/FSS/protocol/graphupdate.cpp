@@ -49,7 +49,7 @@ void obliviousUpdate(
     int c = F_share[0].size();
     int dpf_party = party - 2;
 
-    #pragma omp parallel for
+    //#pragma omp parallel for
     for (int i = 0; i < n; ++i) {
         std::vector<GroupElement> delta_column_share(n, 0);
         evalAll(dpf_party, keys_A[i], 0, delta_column_share.data());
@@ -58,7 +58,7 @@ void obliviousUpdate(
         }
     }
 
-    #pragma omp parallel for
+    //#pragma omp parallel for
     for (int i = 0; i < c; ++i) {
         std::vector<GroupElement> delta_column_share(n, 0);
         evalAll(dpf_party, keys_F[i], 0, delta_column_share.data());
