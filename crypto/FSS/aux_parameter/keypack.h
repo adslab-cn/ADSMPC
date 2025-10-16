@@ -488,16 +488,16 @@ struct GraphUpdateKeyPack {
     int n, c;
     int A_bw, F_bw, A_data_bw, F_data_bw;
 
-    std::vector<DPFKeyPack> keys_A; 
-    std::vector<DPFKeyPack> keys_F; 
+    DPFKeyPack* keys_A; 
+    DPFKeyPack* keys_F; 
 
     GraphUpdateKeyPack() : n(0), c(0) {} 
 
     GraphUpdateKeyPack(int _n, int _c, int _A_bw, int _F_bw, int _A_data_bw, int _F_data_bw)
         : n(_n), c(_c), A_bw(_A_bw), F_bw(_F_bw), A_data_bw(_A_data_bw), F_data_bw(_F_data_bw)
     {
-        keys_A.resize(n);
-        keys_F.resize(c);
+        keys_A = new DPFKeyPack[n];
+        keys_F = new DPFKeyPack[n];
     }
 
 };

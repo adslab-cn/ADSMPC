@@ -10,22 +10,18 @@
 #include <algorithm>
 #include "../../crypto/FSS/api/api.h"
 #include <chrono>
-using Matrix = std::vector<std::vector<GroupElement>>;
 
 // =================================================================
 //                 辅助函数 (Helper Functions)
 // =================================================================
-void printMatrix(const std::string& title, const Matrix& mat) {
+void printMatrix(const std::string& title, GroupElement ** mat, int row, int column) {
     if (FSSConfig::party == DEALER) return;
-    
+    row = 10;
+    column = 10;
     std::cout << "\n--- [Party " << FSSConfig::party << "] " << title << " ---" << std::endl;
-    if (mat.empty()) {
-        std::cout << "  (Matrix is empty)" << std::endl;
-        return;
-    }
-    for (int i = 0; i < mat.size(); ++i) {
+    for (int i = 0; i < row; ++i) {
         std::cout << "  Row " << std::setw(2) << i << ": [ ";
-        for (int j = 0; j < mat[0].size(); ++j) {
+        for (int j = 0; j < column; ++j) {
             // 打印为有符号整数，更容易看懂份额
             std::cout << std::setw(5) << static_cast<int64_t>(mat[i][j]) << " ";
         }
@@ -34,22 +30,16 @@ void printMatrix(const std::string& title, const Matrix& mat) {
 }
 
 // 辅助函数：对二维矩阵进行秘密共享 (基于你的 SecretShare)
-void secretShareMatrix(const Matrix& plain, Matrix& share, int owner) {
+void secretShareMatrix( int rows, int cols, GroupElement ** plain, GroupElement ** share, int owner) {
     if (FSSConfig::party == DEALER) {
-        // Dealer 不持有明文，也不需要份额，但需要参与 PRNG 的同步
-        int rows = plain.size();
-        int cols = plain[0].size();
         SecretShare(rows * cols, nullptr, nullptr, owner);
         return;
     }
 
-    if (plain.empty()) return;
-    int rows = plain.size();
-    int cols = plain[0].size();
     int size = rows * cols;
 
-    std::vector<GroupElement> plain_flat(size);
-    std::vector<GroupElement> share_flat(size);
+    GroupElement *plain_flat = new GroupElement[size];
+    GroupElement* share_flat = new GroupElement[size];
 
     if (FSSConfig::party == owner) {
         for(int i = 0; i < rows; ++i) {
@@ -60,7 +50,7 @@ void secretShareMatrix(const Matrix& plain, Matrix& share, int owner) {
     }
     
     // 调用你已有的、经过测试的 SecretShare 函数
-    SecretShare(size, plain_flat.data(), share_flat.data(), owner);
+    SecretShare(size, plain_flat, share_flat, owner);
 
     // 将一维份额转换回二维
     for(int i = 0; i < rows; ++i) {
@@ -71,14 +61,11 @@ void secretShareMatrix(const Matrix& plain, Matrix& share, int owner) {
 }
 
 // 辅助函数：重构二维矩阵 (基于你的 reconstruct)
-void reconstructMatrix(Matrix& share) {
+void reconstructMatrix(int rows, int cols, GroupElement ** share) {
     if (FSSConfig::party == DEALER) return;
-    if (share.empty()) return;
-    int rows = share.size();
-    int cols = share[0].size();
     int size = rows * cols;
     
-    std::vector<GroupElement> share_flat(size);
+    GroupElement* share_flat = new GroupElement[size];
     for(int i = 0; i < rows; ++i) {
         for(int j = 0; j < cols; ++j) {
             share_flat[i * cols + j] = share[i][j];
@@ -86,7 +73,7 @@ void reconstructMatrix(Matrix& share) {
     }
     
     // 调用全局的 reconstruct 函数
-    reconstruct(size, share_flat.data(), FSSConfig::bitlength);
+    reconstruct(size, share_flat, FSSConfig::bitlength);
     
     for(int i = 0; i < rows; ++i) {
         for(int j = 0; j < cols; ++j) {
@@ -96,7 +83,59 @@ void reconstructMatrix(Matrix& share) {
 }
 
 
+GroupElement** allocateMatrix(int rows, int cols) {
+    if (rows == 0 || cols == 0) return nullptr;
+    GroupElement** mat = new GroupElement*[rows];
+    for (int i = 0; i < rows; ++i) {
+        mat[i] = new GroupElement[cols](); // () for zero-initialization
+    }
+    return mat;
+}
+ 
 
+/**
+ * @brief 对一个 GroupElement** C-style 二维数组进行深拷贝。
+ * 
+ * @param src 要拷贝的源矩阵。
+ * @param rows 源矩阵的行数。
+ * @param cols 源矩阵的列数。
+ * @return GroupElement** 指向新创建的、完全独立的矩阵副本的指针。
+ *         如果源指针为 null 或维度无效，则返回 nullptr。
+ */
+GroupElement** deepCopyMatrix(GroupElement** src, int rows, int cols) {
+    // --- 安全检查 ---
+    // 如果源指针为空或维度无效，则无法进行拷贝。
+    if (!src || rows <= 0 || cols <= 0) {
+        return nullptr;
+    }
+
+    // --- 步骤 1: 分配外层数组 (指针数组) ---
+    // 这个数组将持有指向每一行的指针。
+    GroupElement** dest = new GroupElement*[rows];
+
+    // --- 步骤 2: 循环分配每一行并复制数据 ---
+    for (int i = 0; i < rows; ++i) {
+        // 为目标矩阵的第 i 行分配内存。
+        dest[i] = new GroupElement[cols];
+
+        // 检查源矩阵的当前行是否为空指针，增加健壮性。
+        if (!src[i]) {
+            std::cerr << "Error: Source matrix has a null row at index " << i << std::endl;
+            // 清理已分配的内存以避免泄漏
+            for (int k = 0; k < i; ++k) {
+                delete[] dest[k];
+            }
+            delete[] dest;
+            return nullptr;
+        }
+
+        // 使用 memcpy 高效地将整行数据从源复制到目标。
+        // 这通常比逐个元素复制的 for 循环更快。
+        memcpy(dest[i], src[i], cols * sizeof(GroupElement));
+    }
+
+    return dest;
+}
 // =================================================================
 //                 主测试函数 (Main Test Function)
 // =================================================================
@@ -114,8 +153,8 @@ void test_graph_update(int party) {
     FSS->init("127.0.0.1", true); // true 表示使用内存IO
 
     // --- 2. 定义图的尺寸和参数 ---
-    const int N = 10;
-    const int C = 7;
+    const int N = 2000;
+    const int C = 100;
     const int A_bw = static_cast<int>(ceil(log2(N)));
     const int F_bw = A_bw;
     const int A_data_bw = 64;
@@ -123,15 +162,15 @@ void test_graph_update(int party) {
     int target_node_to_update = 1;
 
     // --- 3. 准备数据 ---
-    Matrix A_old(N, std::vector<GroupElement>(N, 0));
-    Matrix F_old(N, std::vector<GroupElement>(C, 0));
-    Matrix A_new(N, std::vector<GroupElement>(N, 0));
-    Matrix F_new(N, std::vector<GroupElement>(C, 0));
-    Matrix A_share(N, std::vector<GroupElement>(N, 0));
-    Matrix F_share(N, std::vector<GroupElement>(C, 0));
+    GroupElement ** A_old = allocateMatrix(N,N);
+    GroupElement ** F_old = allocateMatrix(N,C);
+    GroupElement ** A_new = allocateMatrix(N,N);
+    GroupElement ** F_new = allocateMatrix(N,C);
+    GroupElement ** A_share = allocateMatrix(N,N);
+    GroupElement ** F_share = allocateMatrix(N,C);
 
-    Matrix A_temp(N, std::vector<GroupElement>(N, 0));
-    Matrix F_temp(N, std::vector<GroupElement>(C, 0));
+    GroupElement ** A_temp = allocateMatrix(N,N);
+    GroupElement ** F_temp = allocateMatrix(N,C);
 
     // DEALER 和 SERVER (作为 owner) 都需要明文
     if (party == DEALER || party == SERVER) {
@@ -140,7 +179,7 @@ void test_graph_update(int party) {
             A_old[i][(i + 1) % N] = 1;
             for(int j = 0; j < C; ++j) F_old[i][j] = i * 100 + j;
         }
-        A_new = A_old; F_new = F_old;
+        A_new = deepCopyMatrix(A_old,N,N); F_new = deepCopyMatrix(F_old,N,C);
         A_new[target_node_to_update][(target_node_to_update + 1) % N] = 0;
         A_new[target_node_to_update][0] = 1;
         F_new[target_node_to_update][0] = 999;
@@ -149,20 +188,20 @@ void test_graph_update(int party) {
     // --- 4. 秘密共享初始图 ---
     // 假设 SERVER 是旧图的持有者 (owner)
     std::cout << "[Party " << party << "] Secret sharing initial graph..." << std::endl;
-    secretShareMatrix(A_old, A_share, SERVER);
-    secretShareMatrix(F_old, F_share, SERVER);
+    secretShareMatrix(N,N,A_old, A_share, SERVER);
+    secretShareMatrix(N,C,F_old, F_share, SERVER);
 
-    A_temp = A_old;
-    F_temp = F_old;
-    reconstructMatrix(A_temp);
-    reconstructMatrix(F_temp);
+    A_temp = deepCopyMatrix(A_old,N,N);
+    F_temp = deepCopyMatrix(F_old,N,C);
+    reconstructMatrix(N,N,A_temp);
+    reconstructMatrix(N,C,F_temp);
     if (party == SERVER) {
-        printMatrix("A_old (Plaintext)", A_old);
-        printMatrix("F_old (Plaintext)", F_old);
-        printMatrix("A_new (Target)", A_new);
-        printMatrix("F_new (Target)", F_new);
-        printMatrix("A_old (Reconstructed)", A_temp);
-        printMatrix("F_old (Reconstructed)", F_temp);
+        printMatrix("A_old (Plaintext)", A_old,N,N);
+        printMatrix("F_old (Plaintext)", F_old,N,C);
+        printMatrix("A_new (Target)", A_new,N,N);
+        printMatrix("F_new (Target)", F_new,N,C);
+        printMatrix("A_old (Reconstructed)", A_temp,N,N);
+        printMatrix("F_old (Reconstructed)", F_temp,N,C);
     }
     
     // --- 5. 执行协议并计时 ---
@@ -170,6 +209,7 @@ void test_graph_update(int party) {
     auto start_time = std::chrono::high_resolution_clock::now();
     obliviousGraphUpdate(
         party, target_node_to_update,
+        N, C,
         A_old, A_new, A_bw, A_data_bw,
         F_old, F_new, F_bw, F_data_bw,
         A_share, F_share
@@ -181,8 +221,8 @@ void test_graph_update(int party) {
     if (party != DEALER) {
         std::cout << "[Party " << party << "] Reconstructing results for verification..." << std::endl;
         
-        reconstructMatrix(A_share);
-        reconstructMatrix(F_share);
+        reconstructMatrix(N,N,A_share);
+        reconstructMatrix(N,C,F_share);
 
         if (party == SERVER) { // 只有一方打印验证结果
             std::cout << "\n\n--- Verification of Graph Update ---" << std::endl;
@@ -201,8 +241,8 @@ void test_graph_update(int party) {
             std::cout << "  Verification result: " << (success ? "SUCCESS!" : "FAILURE!") << std::endl;
         }
         if (party == SERVER) {
-            printMatrix("A_new (Result)", A_share);
-            printMatrix("F_new (Result)", F_share);
+            printMatrix("A_new (Result)", A_share,N,N);
+            printMatrix("F_new (Result)", F_share,N,C);
         }
     }
     //FSS::end(); // 结束计时和通信统计

@@ -470,4 +470,6 @@ public:
     GraphUpdateKeyPack recv_graph_update_key();
 
     ElemWiseMulKeyPack recv_elemwisemul_key(int32_t size);
+
+    void recv_dpf_keypack_t(DPFKeyPack& kp, int bin, int bout);
 };

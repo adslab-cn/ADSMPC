@@ -5,7 +5,6 @@
 #include "../aux_parameter/group_element.h"
 
 #define MASK_PAIR(x) x, x##_mask
-using Matrix = std::vector<std::vector<GroupElement>>; 
 /* 
     测试调用方式
     FSS::start();  // 初始化通信、同步、计时器
@@ -108,10 +107,11 @@ void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share
 void obliviousGraphUpdate(
     int party,
     int target_node_v_star,
+    int n, int c,
     // 明文数据只在 Dealer 端需要，Server/Client 端可以传入空矩阵
-    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
-    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw,
+    GroupElement ** A_old, GroupElement ** A_new, int A_bw, int A_data_bw,
+    GroupElement ** F_old, GroupElement ** F_new, int F_bw, int F_data_bw,
     // 份额数据只在 Server/Client 端需要
-    Matrix& A_share,
-    Matrix& F_share
+    GroupElement ** A_share,
+    GroupElement ** F_share
 );

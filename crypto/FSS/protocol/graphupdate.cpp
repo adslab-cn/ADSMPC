@@ -6,13 +6,10 @@ using Matrix = std::vector<std::vector<GroupElement>>;
 
 
 std::pair<GraphUpdateKeyPack, GraphUpdateKeyPack> keyGenForGraphUpdate(
-    int target_node_v_star,
-    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
-    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw
-) {
-    int n = A_old.size();
-    int c = F_old[0].size();
-    
+    int target_node_v_star, int n, int c,
+    GroupElement ** A_old, GroupElement** A_new, int A_bw, int A_data_bw,
+    GroupElement ** F_old, GroupElement** F_new, int F_bw, int F_data_bw
+) { 
     GraphUpdateKeyPack k0(n, c, A_bw, F_bw, A_data_bw, F_data_bw);
     GraphUpdateKeyPack k1(n, c, A_bw, F_bw, A_data_bw, F_data_bw);
 
@@ -39,29 +36,27 @@ std::pair<GraphUpdateKeyPack, GraphUpdateKeyPack> keyGenForGraphUpdate(
 }
 
 void obliviousUpdate(
-    int party,
-    Matrix& A_share,
-    Matrix& F_share,
-    std::vector<DPFKeyPack>& keys_A,
-    std::vector<DPFKeyPack>& keys_F
+    int party, int n, int c,
+    GroupElement ** A_share,
+    GroupElement** F_share,
+    DPFKeyPack* keys_A,
+    DPFKeyPack* keys_F
 ) {
-    int n = A_share.size();
-    int c = F_share[0].size();
     int dpf_party = party - 2;
-
+    int A_domain_size = 2 << keys_A[0].bin;
     //#pragma omp parallel for
     for (int i = 0; i < n; ++i) {
-        std::vector<GroupElement> delta_column_share(n, 0);
-        evalAll(dpf_party, keys_A[i], 0, delta_column_share.data());
+        GroupElement* delta_column_share = new GroupElement[A_domain_size];
+        evalAll(dpf_party, keys_A[i], 0, delta_column_share);
         for (int j = 0; j < n; ++j) {
             A_share[j][i] += delta_column_share[j];
         }
     }
-
+    int F_domain_size = 2 << keys_F[0].bin;
     //#pragma omp parallel for
     for (int i = 0; i < c; ++i) {
-        std::vector<GroupElement> delta_column_share(n, 0);
-        evalAll(dpf_party, keys_F[i], 0, delta_column_share.data());
+        GroupElement* delta_column_share = new GroupElement[F_domain_size];
+        evalAll(dpf_party, keys_F[i], 0, delta_column_share);
         for (int j = 0; j < n; ++j) {
             F_share[j][i] += delta_column_share[j];
         }

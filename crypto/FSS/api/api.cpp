@@ -1834,12 +1834,13 @@ void DpfRoute(
 void obliviousGraphUpdate(
     int party,
     int target_node_v_star,
+    int n, int c,
     // 明文数据只在 Dealer 端需要，Server/Client 端可以传入空矩阵
-    const Matrix& A_old, const Matrix& A_new, int A_bw, int A_data_bw,
-    const Matrix& F_old, const Matrix& F_new, int F_bw, int F_data_bw,
+    GroupElement ** A_old, GroupElement ** A_new, int A_bw, int A_data_bw,
+    GroupElement ** F_old, GroupElement ** F_new, int F_bw, int F_data_bw,
     // 份额数据只在 Server/Client 端需要
-    Matrix& A_share,
-    Matrix& F_share
+    GroupElement ** A_share,
+    GroupElement ** F_share
 ) {
     if (party == DEALER) {
         std::cout << "[Dealer] Generating and sending graph update keys..." << std::endl;
@@ -1847,6 +1848,7 @@ void obliviousGraphUpdate(
         // 1. 调用 keyGen 生成两方的密钥包
         auto key_pair = keyGenForGraphUpdate(
             target_node_v_star,
+            n, c,
             A_old, A_new, A_bw, A_data_bw,
             F_old, F_new, F_bw, F_data_bw
         );
@@ -1870,7 +1872,7 @@ void obliviousGraphUpdate(
         std::cout << "[Party " << party << "] Starting oblivious update computation..." << std::endl;
 
         // 3. 执行不经意更新的计算部分
-        obliviousUpdate(party, A_share, F_share, key.keys_A,key.keys_F);
+        obliviousUpdate(party, n, c, A_share, F_share, key.keys_A,key.keys_F);
 
         std::cout << "[Party " << party << "] Oblivious update computation finished." << std::endl;
         peer->sync();
