@@ -153,8 +153,8 @@ void test_graph_update(int party) {
     FSS->init("127.0.0.1", true); // true 表示使用内存IO
 
     // --- 2. 定义图的尺寸和参数 ---
-    const int N = 2000;
-    const int C = 100;
+    const int N = 30000;
+    const int C = 1000;
     const int A_bw = static_cast<int>(ceil(log2(N)));
     const int F_bw = A_bw;
     const int A_data_bw = 64;

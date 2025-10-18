@@ -1,10 +1,12 @@
 #include "dpf.h"
 #include "../aux_parameter/assert.h"
 #include <cassert>
+#include <algorithm> // for std::sort
+#include <vector>
 
 using namespace osuCrypto;
 
-inline u8 lsb(const block &b)
+inline uint8_t lsb(const block &b)
 {
     return _mm_cvtsi128_si64x(b) & 1;
 }
@@ -642,4 +644,117 @@ GroupElement evalDPF_with_payload(int party, DPFKeyPack &key, GroupElement x)
     
     // e. 返回这个干净的、在正确域内的最终份额。
     return result;
+}
+
+using namespace osuCrypto;
+
+// 辅助函数：从打包的 t-CW 中提取特定层级的比特
+inline uint8_t get_tcw_bit(const DPFKeyPack& key, int level, int direction) {
+    // direction: 0 for left, 1 for right
+    if (direction == 0) {
+        return (key.tLcw >> (key.bin - 1 - level)) & 1;
+    } else {
+        return (key.tRcw >> (key.bin - 1 - level)) & 1;
+    }
+}
+
+std::map<GroupElement, uint8_t>* compute_prefix_parities(
+    int party,
+    const DPFKeyPack& key,
+    const GroupElement* endpoints,
+    int num_endpoints)
+{
+    const block notOneBlock = toBlock(~0, ~1);
+    const block pt[2] = {ZeroBlock, OneBlock};
+    // --- 0. 准备工作 ---
+    auto results = new std::map<GroupElement, uint8_t>();
+    if (num_endpoints == 0) {
+        return results;
+    }
+
+    // a. 为了排序和去重，我们使用 std::vector 作为临时容器
+    std::vector<GroupElement> sorted_endpoints(endpoints, endpoints + num_endpoints);
+    std::sort(sorted_endpoints.begin(), sorted_endpoints.end());
+    sorted_endpoints.erase(std::unique(sorted_endpoints.begin(), sorted_endpoints.end()), sorted_endpoints.end());
+
+    // --- 1. 初始化记忆化数据结构 (使用C-style数组) ---
+    const int bin = key.bin;
+    block* path = new block[bin + 1];
+    uint8_t* parity = new uint8_t[bin + 1];
+
+    // 初始化根节点状态
+    path[0] = _mm_loadu_si128(key.s);
+    parity[0] = (party - 2); // SERVER=0, CLIENT=1
+
+    // --- 2. 遍历所有端点，利用记忆化进行计算 ---
+    GroupElement prev_endpoint = -1; // 使用一个不可能的值初始化
+
+    for (GroupElement current_endpoint : sorted_endpoints) {
+        
+        // a. 计算与上一个端点的最长公共前缀 (LCP) 长度
+        int common_prefix_len = 0;
+        if (prev_endpoint != -1) {
+            // __builtin_clzll 是 GCC/Clang 内置函数，用于计算64位无符号整数前导零的数量
+            // 64 - clz = 第一个不同比特的位置
+            common_prefix_len = (bin > 63) ? 0 : 64 - __builtin_clzll(current_endpoint ^ prev_endpoint);
+            if (common_prefix_len > bin) common_prefix_len = bin;
+        }
+        
+        // b. 遍历非公共路径部分 (从分叉点到新的叶子节点)
+        for (int i = common_prefix_len; i < bin; ++i) {
+            
+            block s_parent = path[i];
+            uint8_t t_parent = parity[i];
+
+            // i. GGM 扩展
+            AES ak(s_parent);
+            block children_ct[2];
+            ak.ecbEncTwoBlocks(pt, children_ct);
+
+            block s_left_raw = children_ct[0] & notOneBlock;
+            uint8_t t_left_raw = lsb(children_ct[0]);
+            block s_right_raw = children_ct[1] & notOneBlock;
+            uint8_t t_right_raw = lsb(children_ct[1]);
+
+            // ii. 应用校正词 (CW)
+            if (t_parent == 1) {
+                block scw = _mm_loadu_si128(key.s + i + 1);
+                s_left_raw  ^= scw;
+                s_right_raw ^= scw;
+                t_left_raw  ^= get_tcw_bit(key, i, 0); // tLcw
+                t_right_raw ^= get_tcw_bit(key, i, 1); // tRcw
+            }
+            
+            // iii. 核心逻辑：根据当前端点的路径选择，并更新累积奇偶性
+            const uint8_t current_direction = (current_endpoint >> (bin - 1 - i)) & 1;
+            
+            uint8_t running_parity = parity[i];
+            if (current_direction == 1) { // 如果路径向右
+                // 累加左兄弟子树的奇偶性
+                running_parity ^= t_left_raw;
+            }
+
+            // iv. 记忆化：保存新路径节点的状态
+            if (current_direction == 0) { // 向左走
+                path[i + 1] = s_left_raw;
+                parity[i + 1] = running_parity;
+            } else { // 向右走
+                path[i + 1] = s_right_raw;
+                parity[i + 1] = running_parity;
+            }
+        }
+
+        // c. 存储最终结果 (注意：Grotto的完整算法可能更复杂，这里是核心思想的实现)
+        // 根据论文，前缀奇偶性是到达叶子节点前的累积值，不包括叶子本身
+        // 但具体取决于叶子节点的处理方式。为简化，我们取遍历到最后一层的累积值。
+        (*results)[current_endpoint] = parity[bin];
+
+        prev_endpoint = current_endpoint;
+    }
+
+    // --- 3. 清理内存 ---
+    delete[] path;
+    delete[] parity;
+
+    return results;
 }

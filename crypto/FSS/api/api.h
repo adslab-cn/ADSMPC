@@ -115,3 +115,17 @@ void obliviousGraphUpdate(
     GroupElement ** A_share,
     GroupElement ** F_share
 );
+struct OneHotShares {
+    GroupElement s0; // 份额 for 区间 1
+    GroupElement s1; // 份额 for 区间 2
+    GroupElement s2; // 份额 for 区间 3
+};
+
+void three_interval_check(
+    uint8_t party,
+    GroupElement x_share,
+    GroupElement a,
+    GroupElement b,
+    uint8_t bin,
+    OneHotShares& result_shares
+);

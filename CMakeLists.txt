@@ -116,3 +116,8 @@ add_executable(test_graph_update
     tests/bench/graph_update_test.cpp
 )
 target_link_libraries (test_graph_update ${PROJECT_NAME})
+
+add_executable(grotto_spline_test
+    tests/bench/grotto_spline_test.cpp
+)
+target_link_libraries (grotto_spline_test ${PROJECT_NAME})

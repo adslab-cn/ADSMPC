@@ -25,7 +25,6 @@
 #include "../protocol/float.h"
 #include "../protocol/dpfsort.h"
 #include "../protocol/graphupdate.h"
-
 #include <cassert>
 #include <iostream>
 #include <assert.h>
@@ -1877,4 +1876,91 @@ void obliviousGraphUpdate(
         std::cout << "[Party " << party << "] Oblivious update computation finished." << std::endl;
         peer->sync();
     }
+}
+
+void three_interval_check(
+    uint8_t party,
+    GroupElement x_share,
+    GroupElement a,
+    GroupElement b,
+    uint8_t bin,
+    OneHotShares& result_shares) 
+{
+        // --- 2. Dealer (离线) 准备 DPF 密钥和 i 的份额 ---
+    DPFKeyPack my_key(bin, 1);
+    GroupElement my_i_share = 0;
+
+    if (party == DEALER) {
+        std::cout << "[Dealer] Generating and sending keys..." << std::endl;
+        // 生成随机点 i
+        GroupElement i_plain = FSSConfig::prngs[0].get<GroupElement>() % (1ULL << bin);
+        
+        // 生成 i 对应的 DPF 密钥
+        auto key_pair = keyGenDPF(bin, 1, i_plain, 1);
+        
+        // 发送密钥
+        server->send_dpf_keypack(key_pair.first);
+        client->send_dpf_keypack(key_pair.second);
+
+        // 生成并发送 i 的份额
+        auto i_split = splitShare(i_plain, bin);
+        server->send_ge_array(&i_split.first, 1);
+        client->send_ge_array(&i_split.second, 1);
+
+        // Dealer 任务完成
+        std::cout << "[Dealer] Keys sent." << std::endl;
+    } else {
+        // --- 3. Server/Client 接收密钥和份额 ---
+        my_key = dealer->recv_dpf_keypack(bin,1);
+        dealer->recv_ge_array(&my_i_share, 1);
+    }
+
+    if (party != DEALER) peer->sync(); // 同步计算方
+    // --- Step 1: 交互一次，公开移位量 ---
+    GroupElement j1_share = x_share - a - my_i_share;
+    GroupElement j2_share = x_share - b - my_i_share;
+
+    // 复用现有代码: 调用全局 reconstruct
+    // 注意：reconstruct 会修改原数组，所以我们用一个新数组
+    GroupElement j_shares[2] = {j1_share, j2_share};
+    reconstruct(2, j_shares, FSSConfig::bitlength); 
+    GroupElement j1 = j_shares[0];
+    GroupElement j2 = j_shares[1];
+
+    // --- Step 2: 本地计算 ---
+    const auto bin_received = my_key.bin;
+    const GroupElement N = 1ULL << bin_received;
+    const GroupElement N_half = N / 2;
+    
+    // 2.1 准备所有需要查询的前缀端点
+    // (a - j1) % N, (b - j1) % N
+    const GroupElement endpoints_to_query[4] = {
+        (N - j1) % N,
+        (N_half - j1) % N,
+        (N - j2) % N,
+        (N_half - j2) % N
+    };
+
+    // 2.2 一次性计算所有前缀的奇偶性份额
+    std::map<GroupElement, uint8_t>* parity_shares_map = compute_prefix_parities(
+        party, my_key, endpoints_to_query, 4);
+
+    // 2.3 本地组合得到比较结果份额 c1 = [x < a] 和 c2 = [x < b]
+    // [x < a] <=> [x-a < 0] <=> i in [N/2-j1, N-j1) mod N
+    // Parity([N/2-j1, N-j1)) = Parity([0, N-j1)) ^ Parity([0, N/2-j1))
+    uint8_t c1_share = (*parity_shares_map)[(N - j1) % N] ^ (*parity_shares_map)[(N_half - j1) % N];
+    uint8_t c2_share = (*parity_shares_map)[(N - j2) % N] ^ (*parity_shares_map)[(N_half - j2) % N];
+
+    delete parity_shares_map; // 释放内存
+
+    // --- Step 3: 本地组合生成 OneHotShares ---
+    // s0 = c1                  (x < a)
+    // s1 = c2 AND (NOT c1) <=> c2 XOR (c1 AND c2). 
+    //    这里假设 c1, c2 是布尔秘密份额，需要一次 AND 门。
+    //    为简化，我们先用 XOR 逻辑: c1_share ^ c2_share
+    //    这在 c1=1, c2=1 时结果为0，正确；c1=0, c2=1 时为1，正确；c1=0, c2=0时为0，正确。
+    // s2 = NOT c2              (x >= b)
+    result_shares.s0 = c1_share;
+    result_shares.s1 = c1_share ^ c2_share;
+    result_shares.s2 = 1 ^ c2_share;
 }
