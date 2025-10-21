@@ -325,6 +325,8 @@ public:
     void send_elemwisemul_key(const ElemWiseMulKeyPack &k);
 
     void recv_ge_array(GroupElement *arr, int size);
+    
+    void send_fast_relu_key(const FastReluKeyPack &kp);
 };
 
 Peer* waitForPeer(int port); // 服务器等待客户端连接
@@ -472,4 +474,6 @@ public:
     ElemWiseMulKeyPack recv_elemwisemul_key(int32_t size);
 
     void recv_dpf_keypack_t(DPFKeyPack& kp, int bin, int bout);
+
+    FastReluKeyPack recv_fast_relu_key(int Bin, int Bout);
 };

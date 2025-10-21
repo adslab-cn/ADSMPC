@@ -20,6 +20,8 @@ std::pair<DCFKeyPack, DCFKeyPack> keyGenDCF(int Bin, int Bout, int groupSize,
 std::pair<DCFKeyPack, DCFKeyPack> keyGenDCF(int Bin, int Bout,
                 GroupElement idx, GroupElement payload);
 
+std::pair<DCFKeyPack, DCFKeyPack> keyGenDCF_GT(int Bin, int Bout, int groupSize,
+                GroupElement idx, GroupElement* payload);
 void evalDCF(int party, GroupElement *res, GroupElement idx, const DCFKeyPack &key);
 void evalDCF(int Bin, int Bout, int groupSize, 
                 GroupElement *out, // groupSize

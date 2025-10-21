@@ -121,3 +121,8 @@ add_executable(grotto_spline_test
     tests/bench/grotto_spline_test.cpp
 )
 target_link_libraries (grotto_spline_test ${PROJECT_NAME})
+
+add_executable(fastsecnet_relu_test
+    tests/bench/fastsecnet_relu_test.cpp
+)
+target_link_libraries (fastsecnet_relu_test ${PROJECT_NAME})

@@ -25,6 +25,7 @@
 #include "../protocol/float.h"
 #include "../protocol/dpfsort.h"
 #include "../protocol/graphupdate.h"
+#include "../protocol/relufastsecnet.h"
 #include <cassert>
 #include <iostream>
 #include <assert.h>
@@ -1963,4 +1964,86 @@ void three_interval_check(
     result_shares.s0 = c1_share;
     result_shares.s1 = c1_share ^ c2_share;
     result_shares.s2 = 1 ^ c2_share;
+}
+
+void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), std::string prefix)
+{
+    if (party == DEALER)
+    {
+        // Dealer为每个元素生成密钥并发送
+        for (int i = 0; i < size; i++)
+        {
+            auto keys = keyGenFastRelu(bitlength, bitlength);
+            server->send_fast_relu_key(keys.first);
+            client->send_fast_relu_key(keys.second);
+            // 注意：需要释放keyGenFastRelu中为DCFKeyPack分配的内存
+            // 这通常在KeyPack的析构函数中处理
+            
+        }
+    }
+    else
+    {
+        // 存储所有密钥
+        std::vector<FastReluKeyPack> keys(size);
+        for (int i = 0; i < size; i++) {
+            keys[i] = dealer->recv_fast_relu_key(bitlength, bitlength);
+        }
+
+        peer->sync(); // 等待双方都接收完密钥
+
+        // 遵循 Algorithm 4: EvalReLU
+        
+        // 1. 准备公开 x+r
+        GroupElement* masked_x = new GroupElement[size];
+        #pragma omp parallel for
+        for (int i = 0; i < size; i++) {
+            masked_x[i] = inArr[i] + keys[i].r_sh;
+        }
+
+        // 2. 交互一次以重构 masked_x
+        reconstruct(size, masked_x, bitlength);
+        print_array("Original Plaintext 'x+r'", party, size, masked_x);
+        // 3. 本地计算 FSS 并得到系数分享
+        GroupElement* coeff_shares = new GroupElement[size * 2]; // 存储所有b0, b1的分享
+        
+        #pragma omp parallel for
+        for (int i = 0; i < size; i++) {
+            // evalDCF需要一个数组来接收结果，因为groupSize=2
+            GroupElement* b_shares_i = new GroupElement[2];
+            // 对公开值 masked_x[i] (即 x+r) 进行求值
+            evalDCF(party-2, b_shares_i, masked_x[i], keys[i].dcfKey);
+            
+            coeff_shares[i*2 + 0] = b_shares_i[0] + keys[i].b_sh[0]; // [b0]_p
+            coeff_shares[i*2 + 1] = b_shares_i[1] + keys[i].b_sh[1]; // [b1]_p
+
+            delete[] b_shares_i;
+        }
+        
+
+
+        // GroupElement* coeff_shares_temp = new GroupElement[size * 2]; 
+        // memcpy(coeff_shares_temp,coeff_shares,size*2);
+        // reconstruct(size*2, coeff_shares_temp, bitlength);
+        // print_array("Original Plaintext 'b'", party, size*2, coeff_shares_temp,size*2);
+        
+        // 4. 本地计算最终输出份额
+        #pragma omp parallel for
+        for (int i = 0; i < size; i++) {
+            GroupElement b0_sh = coeff_shares[i*2 + 0];
+            GroupElement b1_sh = coeff_shares[i*2 + 1];
+
+            // [y]_p = [b0]_p * (x+r) + [b1]_p
+            // 这是一个公开数(masked_x[i])和秘密份额的乘法，是本地操作
+            outArr[i] = b0_sh * masked_x[i] + b1_sh;
+            mod(outArr[i], bitlength);
+        }
+
+        // GroupElement* temp = new GroupElement[size]; 
+        // memcpy(temp,outArr,size);
+        // reconstruct(size, temp, bitlength);
+        // print_array("Original Plaintext 'res'", party, size, outArr,size);
+
+        delete[] masked_x;
+        delete[] coeff_shares;
+    }
 }

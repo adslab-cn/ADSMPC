@@ -129,3 +129,5 @@ void three_interval_check(
     uint8_t bin,
     OneHotShares& result_shares
 );
+
+void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), std::string prefix = "");

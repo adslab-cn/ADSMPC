@@ -335,3 +335,136 @@ void evalDualDCF(int party, GroupElement* res, GroupElement idx, const DualDCFKe
         res[i] = res[i] + key.sb[i];
     }
 }
+
+
+
+
+std::pair<DCFKeyPack, DCFKeyPack> keyGenDCF_GT(int Bin, int Bout, int groupSize,
+                GroupElement idx, GroupElement* payload)
+{
+    // 这个函数的目标是生成一个FSS，其代表的函数 f(x) 满足：
+    // f(x) = payload   if x > idx
+    // f(x) = 0          if x <= idx
+
+    // 所有的初始化和 GGM 树遍历逻辑与 keyGenDCF 完全相同
+    static const block notOneBlock = toBlock(~0, ~1);
+    static const block notThreeBlock = toBlock(~0, ~3);
+    static const block TwoBlock = toBlock(0, 2);
+    static const block ThreeBlock = toBlock(0, 3);
+    const static block pt[4] = {ZeroBlock, OneBlock, TwoBlock, ThreeBlock};
+
+    int tid = omp_get_thread_num();
+    auto s = FSSConfig::prngs[tid].get<std::array<block, 2>>();
+    block si[2][2];
+    block vi[2][2];
+
+    GroupElement *v_alpha = new GroupElement[groupSize];
+    for (int i = 0; i < groupSize; ++i)
+    {
+        v_alpha[i] = 0;
+    }
+
+    block *k0 = new block[Bin + 1];
+    block *k1 = new block[Bin + 1];
+    GroupElement *v0 = new GroupElement[Bin * groupSize];
+    GroupElement *g0 = new GroupElement[groupSize];
+
+    s[0] = (s[0] & notOneBlock) ^ ((s[1] & OneBlock) ^ OneBlock);
+    k0[0] = s[0];
+    k1[0] = s[1];
+    block ct[4];
+
+    for (int i = 0; i < Bin; ++i)
+    {
+        const u8 keep = static_cast<uint8_t>(idx >> (Bin - 1 - i)) & 1;
+        auto a = toBlock(keep);
+
+        auto ss0 = s[0] & notThreeBlock;
+        auto ss1 = s[1] & notThreeBlock;
+
+        AES ak0(ss0);
+        AES ak1(ss1);
+        ak0.ecbEncFourBlocks(pt, ct);
+        si[0][0] = ct[0]; si[0][1] = ct[1];
+        vi[0][0] = ct[2]; vi[0][1] = ct[3];
+        ak1.ecbEncFourBlocks(pt, ct);
+        si[1][0] = ct[0]; si[1][1] = ct[1];
+        vi[1][0] = ct[2]; vi[1][1] = ct[3];
+
+        auto ti0 = lsb(s[0]);
+        auto ti1 = lsb(s[1]);
+        GroupElement sign = (ti1 == 1) ? -1 : +1;
+
+        uint64_t vi_01_converted[groupSize];
+        uint64_t vi_11_converted[groupSize];
+        uint64_t vi_10_converted[groupSize];
+        uint64_t vi_00_converted[groupSize];
+        convert(Bout, groupSize, vi[0][keep], vi_00_converted);
+        convert(Bout, groupSize, vi[1][keep], vi_10_converted);
+        convert(Bout, groupSize, vi[0][keep ^ 1], vi_01_converted);
+        convert(Bout, groupSize, vi[1][keep ^ 1], vi_11_converted);
+
+        for (int lp = 0; lp < groupSize; ++lp)
+        {
+            v0[i * groupSize + lp] = sign * (-v_alpha[lp] - vi_01_converted[lp] + vi_11_converted[lp]);
+
+            // ====================================================================
+            // ========================= 核心逻辑修改 =========================
+            // ====================================================================
+            // 原始逻辑 (用于小于比较 x < idx):
+            // if (keep == 1) { // 当特殊路径 idx 在此位为 1
+            //     // 那么向左偏离 (走0) 就意味着 x < idx
+            //     // 此时在 "lose=0" 的路径上注入 payload
+            //     v0[i * groupSize + lp] += sign * payload[lp];
+            // }
+
+            // 新逻辑 (用于大于比较 x > idx):
+            // 当求值路径 x 在某一点向右偏离特殊路径 idx 时，我们注入 payload。
+            // 这发生在：特殊路径 idx 在此位为 0 (keep=0)，而 x 在此位为 1。
+            // 此时，x 走的是 "loose=1" (右) 路径。
+            // 而 v0 是施加在 "loose" 路径上的校正值，所以我们在这里添加 payload。
+            if (keep == 0) 
+            {
+                // 当特殊路径 idx 在此位为 0 (向左)
+                // 那么向右偏离 (走1) 就意味着 x > idx
+                // 我们在 "lose=1" 路径上注入 payload
+                v0[i * groupSize + lp] += sign * payload[lp];
+            }
+            // ====================================================================
+            // ======================= 核心逻辑修改结束 =======================
+            // ====================================================================
+
+            v_alpha[lp] = v_alpha[lp] - vi_10_converted[lp] + vi_00_converted[lp] + sign * v0[i * groupSize + lp];
+        }
+
+        std::array<block, 2> siXOR{si[0][0] ^ si[1][0], si[0][1] ^ si[1][1]};
+        std::array<block, 2> t{ (OneBlock & siXOR[0]) ^ a ^ OneBlock, (OneBlock & siXOR[1]) ^ a };
+        auto scw = siXOR[keep ^ 1] & notThreeBlock;
+        k0[i + 1] = k1[i + 1] = scw ^ (t[0] << 1) ^ t[1];
+        auto si0Keep = si[0][keep];
+        auto si1Keep = si[1][keep];
+        auto TKeep = t[keep];
+        s[0] = si0Keep ^ (zeroAndAllOne[ti0] & (scw ^ TKeep));
+        s[1] = si1Keep ^ (zeroAndAllOne[ti1] & (scw ^ TKeep));
+    }
+
+    // 最终修正项的计算逻辑保持不变
+    uint64_t s0_converted[groupSize];
+    uint64_t s1_converted[groupSize];
+    convert(Bout, groupSize, s[0] & notThreeBlock, s0_converted);
+    convert(Bout, groupSize, s[1] & notThreeBlock, s1_converted);
+
+    for (int lp = 0; lp < groupSize; ++lp)
+    {
+        g0[lp] = s1_converted[lp] - s0_converted[lp] - v_alpha[lp];
+        if (lsb(s[1]) == 1)
+        {
+            g0[lp] = g0[lp] * -1;
+        }
+    }
+    
+    // 清理内存
+    delete[] v_alpha;
+
+    return std::make_pair(DCFKeyPack(Bin, Bout, groupSize, k0, g0, v0), DCFKeyPack(Bin, Bout, groupSize, k1, g0, v0));
+}

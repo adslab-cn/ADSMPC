@@ -2152,3 +2152,26 @@ GraphUpdateKeyPack Dealer::recv_graph_update_key() {
     // 5. 返回构造好的密钥包
     return k;
 }
+
+// 在 comms.cpp
+void Peer::send_fast_relu_key(const FastReluKeyPack &kp)
+{
+    // 复用已有的 dcf_keypack 发送逻辑
+    send_dcf_keypack(kp.dcfKey);
+    // 发送额外的 r_sh
+    send_ge(kp.r_sh, kp.Bin);
+
+    send_ge_array(kp.b_sh, 2); 
+}
+
+FastReluKeyPack Dealer::recv_fast_relu_key(int Bin, int Bout)
+{
+    FastReluKeyPack kp;
+    kp.Bin = Bin;
+    kp.Bout = Bout;
+    // groupSize硬编码为2，因为这是FastSecNet ReLU协议的要求
+    kp.dcfKey = recv_dcf_keypack(Bin, Bout, 2); 
+    kp.r_sh = recv_ge(Bin);
+    recv_ge_array(kp.b_sh, 2);
+    return kp;
+}

@@ -501,3 +501,26 @@ struct GraphUpdateKeyPack {
     }
 
 };
+
+struct FastReluKeyPack {
+    int Bin;
+    int Bout;
+    DCFKeyPack dcfKey; // 用于 FSS 比较的核心密钥
+    GroupElement r_sh;   // 随机偏移量 r 的份额
+    GroupElement *b_sh;
+
+
+    // 为了与现有结构保持一致，最好有一个构造函数
+    FastReluKeyPack() : Bin(0), Bout(0) {
+        b_sh = new GroupElement[2];
+    }
+
+    // 需要一个析构函数来释放 dcfKey 内部的指针
+    ~FastReluKeyPack() {
+        // DCFKeyPack 的析构函数会自动处理，这里假设它有正确的资源管理
+        // 如果 DCFKeyPack 是简单结构，需要手动释放
+        // delete[] dcfKey.k;
+        // delete[] dcfKey.g;
+        // delete[] dcfKey.v;
+    }
+};
