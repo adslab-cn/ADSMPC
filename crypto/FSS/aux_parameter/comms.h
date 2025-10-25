@@ -327,6 +327,8 @@ public:
     void recv_ge_array(GroupElement *arr, int size);
     
     void send_fast_relu_key(const FastReluKeyPack &kp);
+
+    void send_ars_crypten_key(const ARS_CrypTen_Style_KeyPack &kp);
 };
 
 Peer* waitForPeer(int port); // 服务器等待客户端连接
@@ -476,4 +478,6 @@ public:
     void recv_dpf_keypack_t(DPFKeyPack& kp, int bin, int bout);
 
     FastReluKeyPack recv_fast_relu_key(int Bin, int Bout);
+
+    ARS_CrypTen_Style_KeyPack recv_ars_crypten_key();
 };

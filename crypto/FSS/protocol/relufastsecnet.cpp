@@ -4,7 +4,7 @@
 
 std::pair<FastReluKeyPack, FastReluKeyPack> keyGenFastRelu(int Bin, int Bout) {
     // 1. Dealer 选择随机偏移量 r
-    GroupElement r = random_ge(10);
+    GroupElement r = 1ULL << 32;
 
     // 2. 定义分段线性函数的参数
     // FastSecNet 定义 AReLU_r(x) = (x-r) if x>=r, else 0.

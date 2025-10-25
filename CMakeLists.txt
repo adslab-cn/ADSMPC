@@ -126,3 +126,8 @@ add_executable(fastsecnet_relu_test
     tests/bench/fastsecnet_relu_test.cpp
 )
 target_link_libraries (fastsecnet_relu_test ${PROJECT_NAME})
+
+add_executable(ode_softmax_test
+    tests/bench/ode_softmax_test.cpp
+)
+target_link_libraries (ode_softmax_test ${PROJECT_NAME})

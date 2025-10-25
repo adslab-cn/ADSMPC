@@ -59,6 +59,7 @@ add_library(${PROJECT_NAME}
     protocol/dpfsort.cpp
     protocol/graphupdate.cpp
     protocol/relufastsecnet.cpp
+    protocol/ars.cpp
 )
 
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads cryptoTools bitpack)

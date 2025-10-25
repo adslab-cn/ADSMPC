@@ -131,3 +131,16 @@ void three_interval_check(
 );
 
 void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), std::string prefix = "");
+
+void SoftmaxODE(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), int iter_num, bool clip);
+
+GroupElement double_to_fixed(double val, int scale);
+
+double fixed_to_double(GroupElement val, int scale);
+
+void print_double_array(const std::string& title, int party, int size, GroupElement* arr, int limit);
+
+void ARS_CrypTen_Style(int32_t size, 
+                       GroupElement* inArr, 
+                       GroupElement* outArr, 
+                       int32_t shift);

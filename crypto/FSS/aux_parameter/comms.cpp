@@ -2175,3 +2175,16 @@ FastReluKeyPack Dealer::recv_fast_relu_key(int Bin, int Bout)
     recv_ge_array(kp.b_sh, 2);
     return kp;
 }
+
+void Peer::send_ars_crypten_key(const ARS_CrypTen_Style_KeyPack &kp) {
+    keyBuf->write((char *)&kp.r_share, sizeof(GroupElement));
+    keyBuf->write((char *)&kp.theta_r_share, sizeof(GroupElement));
+}
+
+// --- Dealer (接收方) 的实现 ---
+ARS_CrypTen_Style_KeyPack Dealer::recv_ars_crypten_key() {
+    ARS_CrypTen_Style_KeyPack kp;
+    keyBuf->read((char *)&kp.r_share, sizeof(GroupElement));
+    keyBuf->read((char *)&kp.theta_r_share, sizeof(GroupElement));
+    return kp;
+}

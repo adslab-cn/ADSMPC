@@ -26,6 +26,7 @@
 #include "../protocol/dpfsort.h"
 #include "../protocol/graphupdate.h"
 #include "../protocol/relufastsecnet.h"
+#include "../protocol/ars.h"
 #include <cassert>
 #include <iostream>
 #include <assert.h>
@@ -1650,34 +1651,51 @@ void evalElemWiseMul(int party, int32_t size,
 }
 
 void ElemWiseMul(int32_t size, 
-                 MASK_PAIR(GroupElement *A), // 展开为 A, A_mask
-                 MASK_PAIR(GroupElement *B), // 展开为 B, B_mask
-                 MASK_PAIR(GroupElement *C)) // 展开为 C, C_mask
+                 MASK_PAIR(GroupElement *A),
+                 MASK_PAIR(GroupElement *B),
+                 MASK_PAIR(GroupElement *C))
 {
+    const int scale = 16; // 假设的定点数小数位数
+
     if (party == DEALER) {
+        // Dealer 需要为 Beaver Triple 和 ARS 生成密钥
         auto keys = keyGenElemWiseMul(size);
         server->send_elemwisemul_key(keys.first);
         client->send_elemwisemul_key(keys.second);
         
-        // #pragma omp parallel for
-        // for (int i = 0; i < size; i++) {
-        //     GroupElement beaver_a = keys.first.a[i] + keys.second.a[i];
-        //     GroupElement beaver_b = keys.first.b[i] + keys.second.b[i];
-        //     GroupElement beaver_c = keys.first.c[i] + keys.second.c[i];
-        //     // 输出掩码 C_mask = c - a*B - b*A + a*b
-        //     C_mask[i] = beaver_c - beaver_a * B_mask[i] - beaver_b * A_mask[i];
-        // }
+        GroupElement * x1 = new GroupElement[size];
+        GroupElement * x2 = new GroupElement[size];
+        // Dealer 还需要为 ARS 生成密钥
+        ARS(size, x1, x1, x2, x2, scale);
 
-        // 释放密钥内存
+        // Dealer 端的掩码逻辑保持不变
+        for (int i=0; i<size; ++i) C_mask[i] = 0;
+
+        // 释放 Beaver Triple 密钥内存
         delete[] keys.first.a; delete[] keys.first.b; delete[] keys.first.c;
         delete[] keys.second.a; delete[] keys.second.b; delete[] keys.second.c;
     } else {
+        // --- 计算方逻辑 ---
+
+        // 1. 接收 Beaver Triple 密钥
         auto key = dealer->recv_elemwisemul_key(size);
-        std::cerr << "ElemWiseMul - Start Eval" << std::endl;
-        evalElemWiseMul(party, size, A, B, C, key);
+        
+        // 2. 执行整数乘法协议
+        // 注意：我们把结果存储在一个临时数组中，因为它的小数位数是 2*scale
+        GroupElement* z_full_precision = new GroupElement[size];
+        evalElemWiseMul(party, size, A, B, z_full_precision, key);
+        
+        // 3. 执行截断 (算术右移)
+        // ARS 会接收 z_full_precision 的份额，计算截断后的份额，并存入 C
+        ARS(size, z_full_precision, nullptr, C, nullptr, scale);
+
+        // 4. 清理内存
         delete[] key.a; delete[] key.b; delete[] key.c;
+        delete[] z_full_precision;
     }
 }
+
+
 void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share_out, int owner)
 {
     if (size == 0) return;
@@ -1709,6 +1727,126 @@ void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share
         }
     }
 }
+
+GroupElement double_to_fixed(double val, int scale) {
+    return static_cast<GroupElement>(round(val * (1LL << scale)));
+}
+
+// 将定点数 GroupElement 转换回 double
+double fixed_to_double(GroupElement val, int scale) {
+    // 处理负数 (补码)
+    int bitlength = FSSConfig::bitlength;
+    if (val & (1ULL << (bitlength - 1))) {
+        int64_t signed_val = val - (1ULL << bitlength);
+        return static_cast<double>(signed_val) / (1LL << scale);
+    }
+    return static_cast<double>(val) / (1LL << scale);
+}
+
+inline GroupElement count_local_wrap(GroupElement a, GroupElement b) {
+    return (a + b < a) ? 1 : 0;
+}
+void ARS_CrypTen_Style(int32_t size, 
+                       GroupElement* inArr, 
+                       GroupElement* outArr, 
+                       int32_t shift)
+{
+    // === Dealer 离线阶段 ===
+    if (party == DEALER) {
+        for (int i = 0; i < size; ++i) {
+            auto keys = keyGenARS_CrypTen_Style(bitlength);
+            server->send_ars_crypten_key(keys.first);
+            client->send_ars_crypten_key(keys.second);
+        }
+        return;
+    }
+    GroupElement debug_beta_xr_share = 0;
+    GroupElement debug_theta_r_share = 0;
+    GroupElement debug_theta_z_share = 0;
+    // === 计算方在线阶段 ===
+    ARS_CrypTen_Style_KeyPack* keys = new ARS_CrypTen_Style_KeyPack[size];
+    for(int i=0; i<size; ++i){
+        keys[i] = dealer->recv_ars_crypten_key();
+        if (i == 0) { // 保存第一个元素的 theta_r 份额用于调试
+            debug_theta_r_share = keys[i].theta_r_share;
+        }
+    }
+
+    GroupElement* z_shares = new GroupElement[size];
+    GroupElement* beta_xr_shares = new GroupElement[size];
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        beta_xr_shares[i] = count_local_wrap(inArr[i], keys[i].r_share);
+        z_shares[i] = inArr[i] + keys[i].r_share;
+    }
+    if (size > 0) { // 保存第一个元素的 beta_xr 份额用于调试
+        debug_beta_xr_share = beta_xr_shares[0];
+    }
+
+    GroupElement* wrap_count_shares = new GroupElement[size];
+    if (party == SERVER) {
+        peer->send_batched_input(z_shares, size, bitlength);
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            wrap_count_shares[i] = beta_xr_shares[i] - keys[i].theta_r_share;
+        }
+        debug_theta_z_share = 0;
+    } else { // CLIENT
+        GroupElement* z_other_shares = new GroupElement[size];
+        peer->recv_batched_input(z_other_shares, size, bitlength);
+        //#pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            GroupElement theta_z = count_local_wrap(z_other_shares[i], z_shares[i]);
+            if (i == 0) { // 保存第一个元素的 theta_z (真实值) 用于调试
+                debug_theta_z_share = theta_z;
+            }
+            wrap_count_shares[i] = theta_z + beta_xr_shares[i] - keys[i].theta_r_share;
+        }
+        delete[] z_other_shares;
+    }
+    
+    if (size > 0) {
+        printf("\n--- [Party %d] ARS Intermediate Value Debug ---\n", party);
+        
+        GroupElement debug_values[3];
+        debug_values[0] = debug_beta_xr_share;
+        debug_values[1] = debug_theta_r_share;
+        debug_values[2] = debug_theta_z_share;
+
+        // 现在双方都持有各自的份额，可以一起调用reconstruct
+        reconstruct(3, debug_values, bitlength);
+
+        // reconstruct之后，debug_values里存的是明文
+        // 只有一方打印即可，避免重复输出
+        if (party == SERVER) {
+            printf("  Reconstructed beta_xr for element 0: %llu\n", debug_values[0]);
+            printf("  Reconstructed theta_r for element 0: %llu\n", debug_values[1]);
+            printf("  Reconstructed theta_z for element 0: %llu\n", debug_values[2]);
+        }
+    }
+
+
+    GroupElement *temp = new GroupElement[size];
+    memcpy(temp,wrap_count_shares,size*sizeof(GroupElement));
+    reconstruct(size,temp,bitlength);
+    print_array("wrap count",party,size,temp,size);
+
+    // 最终组合
+    //GroupElement correction_term_multiplier = (1ULL << (bitlength - shift));
+    GroupElement correction_term_multiplier = 4ULL * ( (1ULL << (bitlength - 2)) >> shift );
+    //#pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        GroupElement plain_truncate = (int64_t)inArr[i] >> shift;
+        GroupElement correction = wrap_count_shares[i] * correction_term_multiplier;
+        outArr[i] = plain_truncate - correction;
+    }
+
+    delete[] keys;
+    delete[] z_shares;
+    delete[] beta_xr_shares;
+    delete[] wrap_count_shares;
+}
+
 void print_array(const std::string& title, int party, int size, const GroupElement* arr, int limit) {
     //if (party == DEALER) return; // Dealer 不打印
 
@@ -1722,6 +1860,23 @@ void print_array(const std::string& title, int party, int size, const GroupEleme
         std::cout << "  ..." << std::endl;
     }
 }
+
+void print_double_array(const std::string& title, int party, int size, GroupElement* arr, int limit) {
+    //if (party == DEALER) return; // Dealer 不打印
+
+    std::cout << "\n--- [Party " << party << "] " << title << " ---" << std::endl;
+    for (int i = 0; i < size && i < limit; ++i) {
+        // 为了可读性，我们可以将 uint64_t 转换为 int64_t 来打印
+        // 这样负数（在模运算下的大正数）会更容易看懂
+        mod_array(arr,size,FSSConfig::bitlength);
+        auto temp = fixed_to_double(arr[i],16);
+        std::cout << "  [" << i << "]: " << temp << std::endl;
+    }
+    if (size > limit) {
+        std::cout << "  ..." << std::endl;
+    }
+}
+
 void DpfRoute(
     int32_t size,
     MASK_PAIR(GroupElement *y_in),  // 展开为 y_in, y_in_mask
@@ -2002,7 +2157,8 @@ void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupEleme
 
         // 2. 交互一次以重构 masked_x
         reconstruct(size, masked_x, bitlength);
-        print_array("Original Plaintext 'x+r'", party, size, masked_x);
+        print_array("Original Plaintext 'x+r'", party, size, masked_x,size);
+        print_double_array("Original Plaintext(double) 'x+r'", party, size, masked_x,size);
         // 3. 本地计算 FSS 并得到系数分享
         GroupElement* coeff_shares = new GroupElement[size * 2]; // 存储所有b0, b1的分享
         
@@ -2038,12 +2194,218 @@ void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupEleme
             mod(outArr[i], bitlength);
         }
 
-        // GroupElement* temp = new GroupElement[size]; 
-        // memcpy(temp,outArr,size);
-        // reconstruct(size, temp, bitlength);
-        // print_array("Original Plaintext 'res'", party, size, outArr,size);
+        GroupElement* temp = new GroupElement[size]; 
+        memcpy(temp,outArr,size * sizeof(GroupElement));
+        reconstruct(size, temp, bitlength);
+        print_double_array("Original Plaintext 'res'", party, size, temp,size);
 
         delete[] masked_x;
         delete[] coeff_shares;
     }
+}
+
+void SoftmaxODE(int32_t size, 
+                GroupElement *inArr, GroupElement *inArr_mask, // MASK_PAIR 展开
+                GroupElement *outArr, GroupElement *outArr_mask,
+                int iter_num, bool clip)
+{
+    // === 0. Dealer 直接退出 ===
+    const int scale = 16; 
+    if (party == DEALER) {
+        // Dealer 的代码是线上计算的“蓝图”，它为每一个安全协议调用生成密钥。
+        // 它不关心变量的真实值，只关心操作的类型和尺寸。
+        // 因此我们使用占位符/虚拟变量。
+        GroupElement *dummy1 = new GroupElement[size];
+        GroupElement *dummy2 = new GroupElement[size];
+        GroupElement *dummy3 = new GroupElement[size];
+        GroupElement *dummy_double_size = new GroupElement[size * 2];
+
+        // 对应在线代码的步骤 2: (可选) 安全裁剪
+        if (clip) {
+            FastRelu(size * 2, dummy_double_size, dummy_double_size, dummy_double_size, dummy_double_size);
+        }
+
+        // 对应在线代码的步骤 3: 初始化 x = x / iter_num
+        int log2_iter_num = (int)log2(iter_num);
+        ARS_CrypTen_Style(size, dummy1, dummy1, log2_iter_num);
+
+        // 对应在线代码的步骤 5: ODE 迭代
+        for (int k = 0; k < iter_num; ++k) {
+            // 为步骤 1 的 ElemWiseMul(g, x) 生成密钥
+            ElemWiseMul(size, dummy1, dummy1, dummy2, dummy2, dummy3, dummy3);
+
+            ARS_CrypTen_Style(size, dummy1, dummy1, scale);
+            // 为 ElemWiseMul(diff, g) 生成密钥
+            ElemWiseMul(size, dummy1, dummy1, dummy2, dummy2, dummy3, dummy3);
+            // 为 ARS(update_term) 生成密钥
+            ARS_CrypTen_Style(size, dummy1, dummy1, scale);
+        }
+
+        // Dealer 不知道真实的输出，所以将输出掩码设置为0
+        // (或者一个随机值，具体取决于框架设计)
+        for(int i=0; i<size; ++i) outArr_mask[i] = 0;
+
+        // 清理内存
+        delete[] dummy1;
+        delete[] dummy2;
+        delete[] dummy3;
+        delete[] dummy_double_size;
+        
+        return;
+    }
+
+    // === 1. 初始化和参数设置 (仅计算方执行) ===
+    
+    GroupElement upper = (12LL << scale);
+    GroupElement lower = (-4LL << scale);
+
+    GroupElement* x = new GroupElement[size];
+    memcpy(x, inArr, size * sizeof(GroupElement));
+
+    // === 2. (可选) 高效安全裁剪 ===
+    if (clip) {
+        GroupElement* clip_relu_in = new GroupElement[size * 2];
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            if (party == SERVER) {
+                clip_relu_in[i]        = inArr[i] - upper;
+                clip_relu_in[i + size] = lower - inArr[i];
+            } else {
+                clip_relu_in[i]        = inArr[i];
+                clip_relu_in[i + size] = -inArr[i];
+            }
+        }
+
+        // GroupElement* temp = new GroupElement[size]; 
+        // memcpy(temp,inArr,size * sizeof(GroupElement));
+        // reconstruct(size, temp, bitlength);
+        // print_double_array("Original Plaintext 'input softmax'", party, size, temp, size);
+
+        // temp = new GroupElement[2*size]; 
+        // memcpy(temp,clip_relu_in,2 * size * sizeof(GroupElement));
+        // reconstruct(size*2, temp, bitlength);
+
+        
+        // print_array("Original Plaintext 'relu input'", party, size*2, temp, size*2);
+        // print_double_array("Original Plaintext 'relu input(double)'", party, size*2, temp, size*2);
+
+        GroupElement* clip_relu_out = new GroupElement[size * 2];
+        FastRelu(size * 2, clip_relu_in, nullptr, clip_relu_out, nullptr);
+
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            x[i] = inArr[i] + clip_relu_out[i + size] - clip_relu_out[i];
+        }
+        
+
+        GroupElement* temp = new GroupElement[size]; 
+        memcpy(temp,x,size * sizeof(GroupElement));
+        reconstruct(size, temp, bitlength);
+        print_double_array("Original Plaintext 'x'", party, size, temp, size);
+
+        delete[] clip_relu_in;
+        delete[] clip_relu_out;
+    }
+    GroupElement* temp_x = new GroupElement[size]; 
+    memcpy(temp_x,x, size* sizeof(GroupElement));
+    reconstruct(size, temp_x, bitlength);
+    
+    print_double_array("x ",party,size,temp_x,size);
+    // === 3. 初始化 x = x / iter_num ===
+    int log2_iter_num = (int)log2(iter_num);
+    ARS_CrypTen_Style(size, x, x, log2_iter_num);
+    
+    
+    GroupElement* temp_sx = new GroupElement[size]; 
+    memcpy(temp_sx,x, size* sizeof(GroupElement));
+    reconstruct(size, temp_sx, bitlength);
+    
+    print_double_array("x / iter_num",party,size,temp_sx,size);
+    // === 4. 初始化 g ===
+    GroupElement* g = new GroupElement[size](); // 初始化为0
+    if (party == SERVER) {
+        GroupElement initial_g_val = (1LL << scale) / size;
+        for (int i = 0; i < size; ++i) g[i] = initial_g_val;
+    }
+
+    // === 5. ODE 迭代 ===
+    GroupElement* gx_prod = new GroupElement[size];
+    GroupElement* dot_prod_broadcast = new GroupElement[size];
+    GroupElement* term3 = new GroupElement[size];
+    
+    GroupElement* temp = new GroupElement[size]; 
+    memcpy(temp,g,size * sizeof(GroupElement));
+    reconstruct(size, temp, bitlength);
+    print_double_array("Original Plaintext 'g0'", party, size, temp, size);
+
+    for (int k = 0; k < iter_num; ++k) {
+        // 步骤 1: 安全计算 g*x。结果 gx_prod 的小数位数是 32
+        ElemWiseMul(size, g, nullptr, x, nullptr, gx_prod, nullptr);
+
+        // 步骤 2: 截断 gx_prod。现在 gx_prod 的小数位数恢复到 16
+        ARS_CrypTen_Style(size, gx_prod, gx_prod, scale);
+
+        // 步骤 3: 计算点积。现在 dot_prod_share 的小数位数是 16
+        GroupElement dot_prod_share = 0;
+        for (int i = 0; i < size; ++i) {
+            dot_prod_share += gx_prod[i];
+        }
+
+        // 步骤 4: 安全计算 (g·x)*g
+        // 4.1: 将标量秘密分享 [g·x] 广播成一个向量
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            dot_prod_broadcast[i] = dot_prod_share;
+        }
+        GroupElement* temp = new GroupElement[1]; 
+        GroupElement* temp_start = new GroupElement[size]; 
+        temp_x = new GroupElement[size]; 
+        GroupElement* temp_gx = new GroupElement[size]; 
+
+        memcpy(temp_start,g, size* sizeof(GroupElement));
+        memcpy(temp_x,x, size* sizeof(GroupElement));
+        memcpy(temp_gx,gx_prod, size* sizeof(GroupElement));
+
+        reconstruct(size, temp_start, bitlength);
+        reconstruct(size, temp_x, bitlength);
+        reconstruct(size, temp_gx, bitlength);
+
+
+
+        print_double_array("g_start",party,size,temp_start,size);
+        print_double_array("x_start",party,size,temp_x,size);
+        print_double_array("gx_prod",party,size,temp_gx,size);
+
+
+        //memcpy(temp,dot_prod_share,  sizeof(GroupElement));
+        temp[0] = dot_prod_share;
+        reconstruct(1, temp, bitlength);
+        print_double_array("Original Plaintext 'dot_prod_share", party, 1, temp, 1);
+
+        // 4.2: 【这里是关键】使用 ElemWiseMul 进行安全乘法。
+        //      输入 g (scale=16) 和 dot_prod_broadcast (scale=16)。
+        //      输出 term3 的小数位数是 32。
+        ElemWiseMul(size, g, nullptr, dot_prod_broadcast, nullptr, term3, nullptr);
+
+        // 步骤 5: 截断 term3。现在 term3 的小数位数恢复到 16
+        ARS_CrypTen_Style(size, term3, term3, scale);
+        // 步骤 6: 更新g。现在所有项 (g, gx_prod, term3) 的小数位数都是 16，计算正确。
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            g[i] = g[i] + gx_prod[i] - term3[i];
+            mod(g[i], bitlength);
+        }
+        //temp = new GroupElement[size]; 
+        //memcpy(temp,g,size * sizeof(GroupElement));
+        //reconstruct(size, temp, bitlength);
+        //print_double_array("Original Plaintext 'g"+std::to_string(k)+"'", party, size, temp, size);
+    }
+    
+    // === 6. 返回结果 ===
+    memcpy(outArr, g, size * sizeof(GroupElement));
+
+    // === 7. 清理内存 ===
+    delete[] x;
+    delete[] g;
+    delete[] gx_prod;
 }

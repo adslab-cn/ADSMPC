@@ -524,3 +524,8 @@ struct FastReluKeyPack {
         // delete[] dcfKey.v;
     }
 };
+
+struct ARS_CrypTen_Style_KeyPack {
+    GroupElement r_share;      // 随机数r的秘密份额
+    GroupElement theta_r_share; // r的真实环绕次数的秘密份额
+};
