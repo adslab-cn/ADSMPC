@@ -144,3 +144,7 @@ void ARS_CrypTen_Style(int32_t size,
                        GroupElement* inArr, 
                        GroupElement* outArr, 
                        int32_t shift);
+/* Sloth的算数左移 */
+void SlothLRS(int size, GroupElement *x, GroupElement *y, int scale, std::string prefix = "");
+/* Sloth的算数右移 */
+void SlothARS(int size, GroupElement *x, GroupElement *y, int scale, std::string prefix = "");

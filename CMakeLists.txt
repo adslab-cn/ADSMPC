@@ -131,3 +131,8 @@ add_executable(ode_softmax_test
     tests/bench/ode_softmax_test.cpp
 )
 target_link_libraries (ode_softmax_test ${PROJECT_NAME})
+
+add_executable(dmpf_test
+    tests/bench/dmpf_test.cpp
+)
+target_link_libraries (dmpf_test ${PROJECT_NAME})

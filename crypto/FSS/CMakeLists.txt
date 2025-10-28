@@ -35,6 +35,7 @@ add_library(${PROJECT_NAME}
     protocol/conv.cpp
     primitives/dcf.cpp
     primitives/dpf.cpp
+    primitives/dmpf.cpp
 
     # src/primitives/2pc_dcf.cpp
     # src/primitives/2pc_idpf.cpp
@@ -60,6 +61,8 @@ add_library(${PROJECT_NAME}
     protocol/graphupdate.cpp
     protocol/relufastsecnet.cpp
     protocol/ars.cpp
+    protocol/wrap.cpp
+    
 )
 
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads cryptoTools bitpack)

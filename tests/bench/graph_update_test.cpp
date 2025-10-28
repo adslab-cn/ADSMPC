@@ -153,7 +153,7 @@ void test_graph_update(int party) {
     FSS->init("127.0.0.1", true); // true 表示使用内存IO
 
     // --- 2. 定义图的尺寸和参数 ---
-    const int N = 30000;
+    const int N = 3000;
     const int C = 1000;
     const int A_bw = static_cast<int>(ceil(log2(N)));
     const int F_bw = A_bw;
@@ -269,7 +269,7 @@ void fptraining_init() {
 }
 // 在你的 main 函数中
 int main(int argc, char** argv) {
-    fptraining_init();
+    //fptraining_init();
     int party = 0;
     if (argc > 1) {
         party = atoi(argv[1]);

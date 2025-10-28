@@ -27,6 +27,7 @@
 #include "../protocol/graphupdate.h"
 #include "../protocol/relufastsecnet.h"
 #include "../protocol/ars.h"
+#include "../protocol/wrap.h"
 #include <cassert>
 #include <iostream>
 #include <assert.h>
@@ -1029,6 +1030,283 @@ void ARS(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *o
     std::cerr << ">> Truncate - End" << std::endl;
 }
 
+void SlothLRSfromWrap(int size, GroupElement *x, GroupElement *w, GroupElement *y, int scale, std::string parent)
+{
+    if (party == DEALER)
+    {
+        pair<SlothLRSKeyPack> *keys = new pair<SlothLRSKeyPack>[size];
+
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            GroupElement rout = random_ge(1);
+            keys[i] = keyGenSlothLRS(bitlength, scale, x[i], w[i], rout);
+            y[i] = rout;
+        }
+
+        for (int i = 0; i < size; ++i)
+        {
+            server->send_sloth_lrs_key(keys[i].first);
+            client->send_sloth_lrs_key(keys[i].second);
+        }
+
+        delete[] keys;
+    }
+    else
+    {
+        SlothLRSKeyPack *keys = new SlothLRSKeyPack[size];
+
+        uint64_t keysize_start = dealer->bytesReceived();
+        uint64_t keyread_time = time_this_block([&]()
+                                                {
+            for (int i = 0; i < size; ++i) {
+                keys[i] = dealer->recv_sloth_lrs_key(bitlength, scale);
+            } });
+
+        peer->sync();
+
+        uint64_t compute_time = time_this_block([&]()
+                                                {
+#pragma omp parallel for
+            for (int i = 0; i < size; ++i) {
+                y[i] = evalSlothLRS(party - 2, x[i], w[i], keys[i]);
+            } });
+
+        auto reconstruction_stats = time_comm_this_block([&]()
+                                                         { reconstruct(size, y, bitlength); });
+
+        FSS::stat_t stat = {
+            parent,
+            keyread_time,
+            compute_time,
+            reconstruction_stats.first,
+            reconstruction_stats.second,
+            dealer->bytesReceived() - keysize_start};
+
+        stat.print();
+        FSS::push_stats(stat);
+
+        delete[] keys;
+    }
+}
+
+
+
+
+void SlothWrap_dpf(int size, int bin, GroupElement *x, GroupElement *y, std::string parent)
+{
+    if (party == DEALER)
+    {
+        pair<WrapDPFKeyPack> *keys = new pair<WrapDPFKeyPack>[size];
+
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            GroupElement rout = random_ge(1);
+            keys[i] = keyGenWrapDPF(bin, x[i], rout);
+            y[i] = rout;
+        }
+
+        for (int i = 0; i < size; ++i)
+        {
+            server->send_wrap_dpf_key(keys[i].first);
+            client->send_wrap_dpf_key(keys[i].second);
+            freeWrapDPFKeyPackPair(keys[i]);
+        }
+
+        delete[] keys;
+    }
+    else
+    {
+        WrapDPFKeyPack *keys = new WrapDPFKeyPack[size];
+
+        uint64_t keysize_start = dealer->bytesReceived();
+        uint64_t keyread_time = time_this_block([&]()
+                                                {
+            for (int i = 0; i < size; ++i) {
+                keys[i] = dealer->recv_wrap_dpf_key(bin);
+            } });
+
+        peer->sync();
+
+        uint64_t compute_time = time_this_block([&]()
+                                                {
+#pragma omp parallel for
+            for (int i = 0; i < size; ++i) {
+                y[i] = evalWrapDPF(party - 2, x[i], keys[i]);
+            } });
+
+        auto reconstruction_stats = time_comm_this_block([&]()
+                                                         { reconstruct(size, y, 1); });
+
+        FSS::stat_t stat = {
+            parent,
+            keyread_time,
+            compute_time,
+            reconstruction_stats.first,
+            reconstruction_stats.second,
+            dealer->bytesReceived() - keysize_start};
+
+        stat.print();
+        FSS::push_stats(stat);
+
+        for (int i = 0; i < size; ++i)
+        {
+            freeWrapDPFKeyPack(keys[i]);
+        }
+        delete[] keys;
+    }
+}
+
+
+/* 检测整数运算的​​溢出行为(好像是) */
+void SlothWrap_ss(int size, int bin, GroupElement *x, GroupElement *y, std::string parent)
+{
+    if (party == DEALER)
+    {
+        pair<WrapSSKeyPack> *keys = new pair<WrapSSKeyPack>[size];
+
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            GroupElement rout = random_ge(1);
+            keys[i] = keyGenWrapSS(bin, x[i], rout);
+            y[i] = rout;
+        }
+
+        for (int i = 0; i < size; ++i)
+        {
+            server->send_wrap_ss_key(keys[i].first);
+            client->send_wrap_ss_key(keys[i].second);
+        }
+
+        delete[] keys;
+    }
+    else
+    {
+        WrapSSKeyPack *keys = new WrapSSKeyPack[size];
+
+        uint64_t keysize_start = dealer->bytesReceived();
+        uint64_t keyread_time = time_this_block([&]()
+                                                {
+            for (int i = 0; i < size; ++i) {
+                keys[i] = dealer->recv_wrap_ss_key(bin);
+            } });
+
+        peer->sync();
+
+        uint64_t compute_time = time_this_block([&]()
+                                                {
+#pragma omp parallel for
+            for (int i = 0; i < size; ++i) {
+                y[i] = evalWrapSS(party - 2, x[i], keys[i]);
+            } });
+
+        auto reconstruction_stats = time_comm_this_block([&]()
+                                                         { reconstruct(size, y, 1); });
+
+        FSS::stat_t stat = {
+            parent,
+            keyread_time,
+            compute_time,
+            reconstruction_stats.first,
+            reconstruction_stats.second,
+            dealer->bytesReceived() - keysize_start};
+
+        stat.print();
+        FSS::push_stats(stat);
+
+        delete[] keys;
+    }
+}
+
+void SlothWrap(int size, int bin, GroupElement *x, GroupElement *w, std::string parent)
+{
+    if (bin <= 7)
+    {
+        SlothWrap_ss(size, bin, x, w, parent);
+    }
+    else
+    {
+        SlothWrap_dpf(size, bin, x, w, parent);
+    }
+}
+
+void SlothLRS(int size, GroupElement *x, GroupElement *y, int scale, std::string prefix)
+{
+    GroupElement *w = new GroupElement[size];
+    GroupElement *x0 = w;
+
+    auto t = time_this_block([&]()
+                             {
+#pragma omp parallel for
+    for (int i = 0; i < size; ++i)
+    {
+        x0[i] = x[i];
+        mod(x0[i], scale);
+    } });
+
+    SlothWrap(size, scale, x0, w, prefix + "Truncation");
+    SlothLRSfromWrap(size, x, w, y, scale, prefix + "Truncation");
+
+    if (party != DEALER)
+        FSS::push_stats({prefix + "Truncation::Misc", 0, t, 0, 0, 0});
+
+    delete[] w;
+}
+
+void SlothARS(int size, GroupElement *x, GroupElement *y, int scale, std::string prefix)
+{
+    GroupElement *z = new GroupElement[size];
+
+    if (party == DEALER)
+    {
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            z[i] = x[i];
+        }
+    }
+    else
+    {
+        auto t = time_this_block([&]()
+                                 {
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            z[i] = x[i] + (1LL << (bitlength - 2));
+        } });
+        FSS::stat_t stat = {prefix + "Truncation::Misc", 0, t, 0, 0, 0};
+        stat.print();
+        FSS::push_stats(stat);
+    }
+
+    SlothLRS(size, z, z, scale, prefix);
+
+    if (party == DEALER)
+    {
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            y[i] = z[i];
+        }
+    }
+    else
+    {
+        auto t = time_this_block([&]()
+                                 {
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            y[i] = z[i] - (1LL << (bitlength - scale - 2));
+        } });
+        FSS::stat_t stat = {prefix + "Truncation::Misc", 0, t, 0, 0, 0};
+        stat.print();
+        FSS::push_stats(stat);
+    }
+}
+
+
 void ScaleDown(int32_t size, MASK_PAIR(GroupElement *inArr), int32_t sf)
 {
     std::cerr << ">> ScaleDown - Start " << std::endl;
@@ -1666,8 +1944,8 @@ void ElemWiseMul(int32_t size,
         GroupElement * x1 = new GroupElement[size];
         GroupElement * x2 = new GroupElement[size];
         // Dealer 还需要为 ARS 生成密钥
-        ARS(size, x1, x1, x2, x2, scale);
-
+        //ARS(size, x1, x1, x2, x2, scale);
+        ARS_CrypTen_Style(size, x1, x1, scale);
         // Dealer 端的掩码逻辑保持不变
         for (int i=0; i<size; ++i) C_mask[i] = 0;
 
@@ -1687,8 +1965,8 @@ void ElemWiseMul(int32_t size,
         
         // 3. 执行截断 (算术右移)
         // ARS 会接收 z_full_precision 的份额，计算截断后的份额，并存入 C
-        ARS(size, z_full_precision, nullptr, C, nullptr, scale);
-
+        //ARS(size, z_full_precision, nullptr, C, nullptr, scale);
+        ARS_CrypTen_Style(size, z_full_precision, C, scale);
         // 4. 清理内存
         delete[] key.a; delete[] key.b; delete[] key.c;
         delete[] z_full_precision;
@@ -1744,8 +2022,37 @@ double fixed_to_double(GroupElement val, int scale) {
 }
 
 inline GroupElement count_local_wrap(GroupElement a, GroupElement b) {
-    return (a + b < a) ? 1 : 0;
+    // 将无符号的 GroupElement 转换为有符号的 int64_t 来进行判断
+    int64_t signed_a = static_cast<int64_t>(a);
+    int64_t signed_b = static_cast<int64_t>(b);
+    
+    // 加法仍然在 uint64_t 上进行，以模拟环的行为
+    GroupElement next_unsigned = a + b;
+    int64_t next_signed = static_cast<int64_t>(next_unsigned);
+
+    // 检查上溢: 两个正数相加，结果为负数
+    if (signed_a > 0 && signed_b > 0 && next_signed < 0) {
+        return 1; // 上溢
+    }
+    
+    // 检查下溢: 两个负数相加，结果为正数
+    if (signed_a < 0 && signed_b < 0 && next_signed > 0) {
+        return -1; // 下溢，返回 -1 (在环上是一个大正数)
+    }
+
+    return 0; // 没有溢出
 }
+
+// inline GroupElement count_local_wrap(GroupElement a, GroupElement b) {
+//     // 将无符号的 GroupElement 转换为有符号的 int64_t 来进行判断
+//     GroupElement c = a + b;
+//     if(a>c||b>c){
+//         return 1;
+//     }else{
+//         return 0;
+//     }
+// }
+
 void ARS_CrypTen_Style(int32_t size, 
                        GroupElement* inArr, 
                        GroupElement* outArr, 
@@ -1767,20 +2074,20 @@ void ARS_CrypTen_Style(int32_t size,
     ARS_CrypTen_Style_KeyPack* keys = new ARS_CrypTen_Style_KeyPack[size];
     for(int i=0; i<size; ++i){
         keys[i] = dealer->recv_ars_crypten_key();
-        if (i == 0) { // 保存第一个元素的 theta_r 份额用于调试
+        if (i == 3) { // 保存第一个元素的 theta_r 份额用于调试
             debug_theta_r_share = keys[i].theta_r_share;
         }
     }
 
     GroupElement* z_shares = new GroupElement[size];
     GroupElement* beta_xr_shares = new GroupElement[size];
-    #pragma omp parallel for
+    //#pragma omp parallel for
     for (int i = 0; i < size; ++i) {
         beta_xr_shares[i] = count_local_wrap(inArr[i], keys[i].r_share);
         z_shares[i] = inArr[i] + keys[i].r_share;
     }
     if (size > 0) { // 保存第一个元素的 beta_xr 份额用于调试
-        debug_beta_xr_share = beta_xr_shares[0];
+        debug_beta_xr_share = beta_xr_shares[3];
     }
 
     GroupElement* wrap_count_shares = new GroupElement[size];
@@ -1797,7 +2104,7 @@ void ARS_CrypTen_Style(int32_t size,
         //#pragma omp parallel for
         for (int i = 0; i < size; ++i) {
             GroupElement theta_z = count_local_wrap(z_other_shares[i], z_shares[i]);
-            if (i == 0) { // 保存第一个元素的 theta_z (真实值) 用于调试
+            if (i == 3) { // 保存第一个元素的 theta_z (真实值) 用于调试
                 debug_theta_z_share = theta_z;
             }
             wrap_count_shares[i] = theta_z + beta_xr_shares[i] - keys[i].theta_r_share;
@@ -1812,7 +2119,7 @@ void ARS_CrypTen_Style(int32_t size,
         debug_values[0] = debug_beta_xr_share;
         debug_values[1] = debug_theta_r_share;
         debug_values[2] = debug_theta_z_share;
-
+        printf("  beta_xr share for element 0: %llu\n", debug_values[0]);
         // 现在双方都持有各自的份额，可以一起调用reconstruct
         reconstruct(3, debug_values, bitlength);
 
@@ -1833,11 +2140,13 @@ void ARS_CrypTen_Style(int32_t size,
 
     // 最终组合
     //GroupElement correction_term_multiplier = (1ULL << (bitlength - shift));
-    GroupElement correction_term_multiplier = 4ULL * ( (1ULL << (bitlength - 2)) >> shift );
+    //GroupElement correction_term_multiplier = 4ULL * ( (1ULL << (bitlength - 2)) >> shift );
+    GroupElement correction_term_multiplier = (1ULL << (bitlength - shift));
     //#pragma omp parallel for
     for (int i = 0; i < size; ++i) {
-        GroupElement plain_truncate = (int64_t)inArr[i] >> shift;
+        GroupElement plain_truncate = static_cast<int64_t>(inArr[i]) >> shift;
         GroupElement correction = wrap_count_shares[i] * correction_term_multiplier;
+        correction = 0;
         outArr[i] = plain_truncate - correction;
     }
 
@@ -2227,18 +2536,18 @@ void SoftmaxODE(int32_t size,
 
         // 对应在线代码的步骤 3: 初始化 x = x / iter_num
         int log2_iter_num = (int)log2(iter_num);
-        ARS_CrypTen_Style(size, dummy1, dummy1, log2_iter_num);
+        ARS_CrypTen_Style(size,dummy1,dummy2,log2_iter_num);
+        //SlothARS(size, dummy1, dummy1, log2_iter_num, "SoftmaxODE::");
+        //ARS_CrypTen_Style(size, dummy1, dummy1, log2_iter_num);
 
         // 对应在线代码的步骤 5: ODE 迭代
         for (int k = 0; k < iter_num; ++k) {
             // 为步骤 1 的 ElemWiseMul(g, x) 生成密钥
             ElemWiseMul(size, dummy1, dummy1, dummy2, dummy2, dummy3, dummy3);
 
-            ARS_CrypTen_Style(size, dummy1, dummy1, scale);
             // 为 ElemWiseMul(diff, g) 生成密钥
             ElemWiseMul(size, dummy1, dummy1, dummy2, dummy2, dummy3, dummy3);
-            // 为 ARS(update_term) 生成密钥
-            ARS_CrypTen_Style(size, dummy1, dummy1, scale);
+
         }
 
         // Dealer 不知道真实的输出，所以将输出掩码设置为0
@@ -2306,6 +2615,7 @@ void SoftmaxODE(int32_t size,
         delete[] clip_relu_in;
         delete[] clip_relu_out;
     }
+    
     GroupElement* temp_x = new GroupElement[size]; 
     memcpy(temp_x,x, size* sizeof(GroupElement));
     reconstruct(size, temp_x, bitlength);
@@ -2313,12 +2623,15 @@ void SoftmaxODE(int32_t size,
     print_double_array("x ",party,size,temp_x,size);
     // === 3. 初始化 x = x / iter_num ===
     int log2_iter_num = (int)log2(iter_num);
-    ARS_CrypTen_Style(size, x, x, log2_iter_num);
-    
-    
+    peer->sync();
+    //ARS_CrypTen_Style(size, x, x, log2_iter_num);
+    GroupElement *t = new GroupElement[size];
+    ARS_CrypTen_Style(size, x, x, log2_iter_num); 
+
     GroupElement* temp_sx = new GroupElement[size]; 
     memcpy(temp_sx,x, size* sizeof(GroupElement));
     reconstruct(size, temp_sx, bitlength);
+    
     
     print_double_array("x / iter_num",party,size,temp_sx,size);
     // === 4. 初始化 g ===
@@ -2339,12 +2652,7 @@ void SoftmaxODE(int32_t size,
     print_double_array("Original Plaintext 'g0'", party, size, temp, size);
 
     for (int k = 0; k < iter_num; ++k) {
-        // 步骤 1: 安全计算 g*x。结果 gx_prod 的小数位数是 32
         ElemWiseMul(size, g, nullptr, x, nullptr, gx_prod, nullptr);
-
-        // 步骤 2: 截断 gx_prod。现在 gx_prod 的小数位数恢复到 16
-        ARS_CrypTen_Style(size, gx_prod, gx_prod, scale);
-
         // 步骤 3: 计算点积。现在 dot_prod_share 的小数位数是 16
         GroupElement dot_prod_share = 0;
         for (int i = 0; i < size; ++i) {
@@ -2384,11 +2692,8 @@ void SoftmaxODE(int32_t size,
 
         // 4.2: 【这里是关键】使用 ElemWiseMul 进行安全乘法。
         //      输入 g (scale=16) 和 dot_prod_broadcast (scale=16)。
-        //      输出 term3 的小数位数是 32。
         ElemWiseMul(size, g, nullptr, dot_prod_broadcast, nullptr, term3, nullptr);
 
-        // 步骤 5: 截断 term3。现在 term3 的小数位数恢复到 16
-        ARS_CrypTen_Style(size, term3, term3, scale);
         // 步骤 6: 更新g。现在所有项 (g, gx_prod, term3) 的小数位数都是 16，计算正确。
         #pragma omp parallel for
         for (int i = 0; i < size; ++i) {
