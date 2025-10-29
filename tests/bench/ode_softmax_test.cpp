@@ -120,11 +120,21 @@ void test_softmax_ode(int party) {
     // --- 5. 执行协议 ---
     GroupElement* output_shares = new GroupElement[size]();
     FSS::start();
-    
+    auto start_time = std::chrono::high_resolution_clock::now();
     SoftmaxODE(size, input_shares, mask1, output_shares, mask2, iter_num, clip);
 
     FSS::end();
 
+        auto end_time = std::chrono::high_resolution_clock::now();
+
+    // 4. 计算时间差并打印
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    // 为了防止多个参与方都打印时间，可以只让一个 party (例如 party 0) 打印
+        std::cout << "================================================" << std::endl;
+        std::cout << "Total execution time: " << duration.count() << " milliseconds" << std::endl;
+        std::cout << "Total execution time: " << duration.count() / 1000.0 << " seconds" << std::endl;
+        std::cout << "================================================" << std::endl;
     // --- 6. 重构与验证 ---
     if (party != DEALER) {
         std::cout << "\n   Party " << party << ": Reconstructing final output..." << std::endl;

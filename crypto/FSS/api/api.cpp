@@ -2081,7 +2081,7 @@ void ARS_CrypTen_Style(int32_t size,
 
     GroupElement* z_shares = new GroupElement[size];
     GroupElement* beta_xr_shares = new GroupElement[size];
-    //#pragma omp parallel for
+    #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
         beta_xr_shares[i] = count_local_wrap(inArr[i], keys[i].r_share);
         z_shares[i] = inArr[i] + keys[i].r_share;
@@ -2101,7 +2101,7 @@ void ARS_CrypTen_Style(int32_t size,
     } else { // CLIENT
         GroupElement* z_other_shares = new GroupElement[size];
         peer->recv_batched_input(z_other_shares, size, bitlength);
-        //#pragma omp parallel for
+        #pragma omp parallel for
         for (int i = 0; i < size; ++i) {
             GroupElement theta_z = count_local_wrap(z_other_shares[i], z_shares[i]);
             if (i == 3) { // 保存第一个元素的 theta_z (真实值) 用于调试
@@ -2112,41 +2112,41 @@ void ARS_CrypTen_Style(int32_t size,
         delete[] z_other_shares;
     }
     
-    if (size > 0) {
-        printf("\n--- [Party %d] ARS Intermediate Value Debug ---\n", party);
-        
-        GroupElement debug_values[3];
-        debug_values[0] = debug_beta_xr_share;
-        debug_values[1] = debug_theta_r_share;
-        debug_values[2] = debug_theta_z_share;
-        printf("  beta_xr share for element 0: %llu\n", debug_values[0]);
-        // 现在双方都持有各自的份额，可以一起调用reconstruct
-        reconstruct(3, debug_values, bitlength);
+    //if (size > 0) {
+    //    printf("\n--- [Party %d] ARS Intermediate Value Debug ---\n", party);
+    //    
+    //    GroupElement debug_values[3];
+    //    debug_values[0] = debug_beta_xr_share;
+    //    debug_values[1] = debug_theta_r_share;
+    //    debug_values[2] = debug_theta_z_share;
+    //    printf("  beta_xr share for element 0: %llu\n", debug_values[0]);
+    //    // 现在双方都持有各自的份额，可以一起调用reconstruct
+    //    reconstruct(3, debug_values, bitlength);
+    //
+    //    // reconstruct之后，debug_values里存的是明文
+    //    // 只有一方打印即可，避免重复输出
+    //    if (party == SERVER) {
+    //        printf("  Reconstructed beta_xr for element 0: %llu\n", debug_values[0]);
+    //        printf("  Reconstructed theta_r for element 0: %llu\n", debug_values[1]);
+    //        printf("  Reconstructed theta_z for element 0: %llu\n", debug_values[2]);
+    //    }
+    //}
 
-        // reconstruct之后，debug_values里存的是明文
-        // 只有一方打印即可，避免重复输出
-        if (party == SERVER) {
-            printf("  Reconstructed beta_xr for element 0: %llu\n", debug_values[0]);
-            printf("  Reconstructed theta_r for element 0: %llu\n", debug_values[1]);
-            printf("  Reconstructed theta_z for element 0: %llu\n", debug_values[2]);
-        }
-    }
 
-
-    GroupElement *temp = new GroupElement[size];
-    memcpy(temp,wrap_count_shares,size*sizeof(GroupElement));
-    reconstruct(size,temp,bitlength);
-    print_array("wrap count",party,size,temp,size);
+    //GroupElement *temp = new GroupElement[size];
+    //memcpy(temp,wrap_count_shares,size*sizeof(GroupElement));
+    //reconstruct(size,temp,bitlength);
+    //print_array("wrap count",party,size,temp,size);
 
     // 最终组合
     //GroupElement correction_term_multiplier = (1ULL << (bitlength - shift));
     //GroupElement correction_term_multiplier = 4ULL * ( (1ULL << (bitlength - 2)) >> shift );
     GroupElement correction_term_multiplier = (1ULL << (bitlength - shift));
-    //#pragma omp parallel for
+    #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
         GroupElement plain_truncate = static_cast<int64_t>(inArr[i]) >> shift;
         GroupElement correction = wrap_count_shares[i] * correction_term_multiplier;
-        correction = 0;
+        //correction = 0;
         outArr[i] = plain_truncate - correction;
     }
 
@@ -2607,20 +2607,20 @@ void SoftmaxODE(int32_t size,
         }
         
 
-        GroupElement* temp = new GroupElement[size]; 
-        memcpy(temp,x,size * sizeof(GroupElement));
-        reconstruct(size, temp, bitlength);
-        print_double_array("Original Plaintext 'x'", party, size, temp, size);
+        //GroupElement* temp = new GroupElement[size]; 
+        //memcpy(temp,x,size * sizeof(GroupElement));
+        //reconstruct(size, temp, bitlength);
+        //print_double_array("Original Plaintext 'x'", party, size, temp, size);
 
         delete[] clip_relu_in;
         delete[] clip_relu_out;
     }
     
-    GroupElement* temp_x = new GroupElement[size]; 
-    memcpy(temp_x,x, size* sizeof(GroupElement));
-    reconstruct(size, temp_x, bitlength);
+    //GroupElement* temp_x = new GroupElement[size]; 
+    //memcpy(temp_x,x, size* sizeof(GroupElement));
+    //reconstruct(size, temp_x, bitlength);
     
-    print_double_array("x ",party,size,temp_x,size);
+    //print_double_array("x ",party,size,temp_x,size);
     // === 3. 初始化 x = x / iter_num ===
     int log2_iter_num = (int)log2(iter_num);
     peer->sync();
@@ -2628,12 +2628,12 @@ void SoftmaxODE(int32_t size,
     GroupElement *t = new GroupElement[size];
     ARS_CrypTen_Style(size, x, x, log2_iter_num); 
 
-    GroupElement* temp_sx = new GroupElement[size]; 
-    memcpy(temp_sx,x, size* sizeof(GroupElement));
-    reconstruct(size, temp_sx, bitlength);
+    //GroupElement* temp_sx = new GroupElement[size]; 
+    //memcpy(temp_sx,x, size* sizeof(GroupElement));
+    //reconstruct(size, temp_sx, bitlength);
     
     
-    print_double_array("x / iter_num",party,size,temp_sx,size);
+    //print_double_array("x / iter_num",party,size,temp_sx,size);
     // === 4. 初始化 g ===
     GroupElement* g = new GroupElement[size](); // 初始化为0
     if (party == SERVER) {
@@ -2646,10 +2646,10 @@ void SoftmaxODE(int32_t size,
     GroupElement* dot_prod_broadcast = new GroupElement[size];
     GroupElement* term3 = new GroupElement[size];
     
-    GroupElement* temp = new GroupElement[size]; 
-    memcpy(temp,g,size * sizeof(GroupElement));
-    reconstruct(size, temp, bitlength);
-    print_double_array("Original Plaintext 'g0'", party, size, temp, size);
+    //GroupElement* temp = new GroupElement[size]; 
+    //memcpy(temp,g,size * sizeof(GroupElement));
+    //reconstruct(size, temp, bitlength);
+    //print_double_array("Original Plaintext 'g0'", party, size, temp, size);
 
     for (int k = 0; k < iter_num; ++k) {
         ElemWiseMul(size, g, nullptr, x, nullptr, gx_prod, nullptr);
@@ -2665,30 +2665,30 @@ void SoftmaxODE(int32_t size,
         for (int i = 0; i < size; ++i) {
             dot_prod_broadcast[i] = dot_prod_share;
         }
-        GroupElement* temp = new GroupElement[1]; 
-        GroupElement* temp_start = new GroupElement[size]; 
-        temp_x = new GroupElement[size]; 
-        GroupElement* temp_gx = new GroupElement[size]; 
+        //GroupElement* temp = new GroupElement[1]; 
+        //GroupElement* temp_start = new GroupElement[size]; 
+        //temp_x = new GroupElement[size]; 
+        //GroupElement* temp_gx = new GroupElement[size]; 
 
-        memcpy(temp_start,g, size* sizeof(GroupElement));
-        memcpy(temp_x,x, size* sizeof(GroupElement));
-        memcpy(temp_gx,gx_prod, size* sizeof(GroupElement));
+        //memcpy(temp_start,g, size* sizeof(GroupElement));
+        //memcpy(temp_x,x, size* sizeof(GroupElement));
+        //memcpy(temp_gx,gx_prod, size* sizeof(GroupElement));
 
-        reconstruct(size, temp_start, bitlength);
-        reconstruct(size, temp_x, bitlength);
-        reconstruct(size, temp_gx, bitlength);
+        //reconstruct(size, temp_start, bitlength);
+        //reconstruct(size, temp_x, bitlength);
+        //reconstruct(size, temp_gx, bitlength);
 
 
 
-        print_double_array("g_start",party,size,temp_start,size);
-        print_double_array("x_start",party,size,temp_x,size);
-        print_double_array("gx_prod",party,size,temp_gx,size);
+        //print_double_array("g_start",party,size,temp_start,size);
+        //print_double_array("x_start",party,size,temp_x,size);
+        //print_double_array("gx_prod",party,size,temp_gx,size);
 
 
         //memcpy(temp,dot_prod_share,  sizeof(GroupElement));
-        temp[0] = dot_prod_share;
-        reconstruct(1, temp, bitlength);
-        print_double_array("Original Plaintext 'dot_prod_share", party, 1, temp, 1);
+        //temp[0] = dot_prod_share;
+        //reconstruct(1, temp, bitlength);
+        //print_double_array("Original Plaintext 'dot_prod_share", party, 1, temp, 1);
 
         // 4.2: 【这里是关键】使用 ElemWiseMul 进行安全乘法。
         //      输入 g (scale=16) 和 dot_prod_broadcast (scale=16)。
