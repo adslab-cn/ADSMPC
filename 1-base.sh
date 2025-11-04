@@ -1,5 +1,6 @@
 # 基础环境安装
-
+export https_proxy="http://10.122.217.217:10808"
+export http_proxy="http://10.122.217.217:10808"
 # 获取输入参数
 mode=$1
 

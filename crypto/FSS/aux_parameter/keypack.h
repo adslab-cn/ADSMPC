@@ -529,3 +529,14 @@ struct ARS_CrypTen_Style_KeyPack {
     GroupElement r_share;      // 随机数r的秘密份额
     GroupElement theta_r_share; // r的真实环绕次数的秘密份额
 };
+
+struct OneHotShares_xor {
+    uint8_t s0_share; // [x < lower] 的XOR份额
+    uint8_t s1_share; // [lower <= x < upper] 的XOR份额
+    uint8_t s2_share; // [x >= upper] 的XOR份额
+};
+
+struct B2A_Crypten_KeyPack {
+    uint8_t r_xor_share;
+    GroupElement r_add_share;
+};

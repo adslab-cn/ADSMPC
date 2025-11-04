@@ -2188,3 +2188,13 @@ ARS_CrypTen_Style_KeyPack Dealer::recv_ars_crypten_key() {
     keyBuf->read((char *)&kp.theta_r_share, sizeof(GroupElement));
     return kp;
 }
+
+void Peer::send_b2a_crypten_keys(const B2A_Crypten_KeyPack* keys, int32_t size) {
+    // 直接将整个结构体数组作为字节流发送
+    keyBuf->write((char*)keys, size * sizeof(B2A_Crypten_KeyPack));
+}
+
+void Dealer::recv_b2a_crypten_keys(B2A_Crypten_KeyPack* keys, int32_t size) {
+    // 接收字节流并填充到结构体数组中
+    keyBuf->read((char*)keys, size * sizeof(B2A_Crypten_KeyPack));
+}

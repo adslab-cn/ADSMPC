@@ -136,3 +136,8 @@ add_executable(dmpf_test
     tests/bench/dmpf_test.cpp
 )
 target_link_libraries (dmpf_test ${PROJECT_NAME})
+
+add_executable(temp_test
+    tests/bench/temp.cpp
+)
+target_link_libraries (temp_test ${PROJECT_NAME})

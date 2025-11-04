@@ -2343,7 +2343,7 @@ void obliviousGraphUpdate(
     }
 }
 
-void three_interval_check_revised(
+void three_interval_check(
     uint8_t party,
     GroupElement x_share,
     GroupElement a, // Public boundary 1
@@ -2373,7 +2373,7 @@ void three_interval_check_revised(
     // 调用 reconstruct 来安全地公开 d。
     // reconstruct 内部处理通信，返回 d 的明文值。
     // 假设 reconstruct(share) 返回 share_0 + share_1
-    GroupElement d = reconstruct_single_value(d_share); 
+    GroupElement d ;//= reconstruct_single_value(d_share); 
 
     // --- Step 2 (Revised): 本地计算旋转后的边界点 a' 和 b' ---
     const GroupElement N = 1ULL << bin;
@@ -2498,14 +2498,470 @@ void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupEleme
             mod(outArr[i], bitlength);
         }
 
-        GroupElement* temp = new GroupElement[size]; 
-        memcpy(temp,outArr,size * sizeof(GroupElement));
-        reconstruct(size, temp, bitlength);
-        print_double_array("Original Plaintext 'res'", party, size, temp,size);
+        // GroupElement* temp = new GroupElement[size]; 
+        // memcpy(temp,outArr,size * sizeof(GroupElement));
+        // reconstruct(size, temp, bitlength);
+        // print_double_array("Original Plaintext 'res'", party, size, temp,size);
 
         delete[] masked_x;
         delete[] coeff_shares;
     }
+}
+
+/**
+ * @brief 使用 Crypten 风格的 "Mask-Reconstruct-Compute" 协议将布尔份额转换为算术份额。
+ * 
+ * @param size 批量转换的大小。
+ * @param x_shares 输入的布尔(XOR)份额数组。
+ * @param y_shares 输出的算术(加性)份额数组。
+ */
+void B2A_Crypten(int32_t size, const uint8_t* x_shares, GroupElement* y_shares)
+{
+    if (party == DEALER) {
+        // Dealer 调用对应的密钥生成函数
+        B2A_Crypten_KeyPack* server_keys = new B2A_Crypten_KeyPack[size];
+        B2A_Crypten_KeyPack* client_keys = new B2A_Crypten_KeyPack[size];
+
+
+        for (int i = 0; i < size; ++i) {
+            // 1. Dealer 生成一个随机比特 r
+            uint8_t r_plain = prngs[0].get<uint8_t>() & 1;
+
+            // 2. 创建 r 的 XOR 份额
+            auto r_xor_split = splitShareXor(r_plain,1); 
+            
+            // 3. 创建 r 的加性份额 (值为 0 或 1)
+            auto r_add_split = splitShare((GroupElement)r_plain, FSSConfig::bitlength);
+
+            // 4. 填充密钥包
+            server_keys[i].r_xor_share = static_cast<uint8_t>(r_xor_split.first);
+            server_keys[i].r_add_share = r_add_split.first;
+
+            client_keys[i].r_xor_share = static_cast<uint8_t>(r_xor_split.second);
+            client_keys[i].r_add_share = r_add_split.second;
+        }
+
+        // 5. 发送密钥包
+        server->send_b2a_crypten_keys(server_keys, size);
+        client->send_b2a_crypten_keys(client_keys, size);
+
+        delete[] server_keys;
+        delete[] client_keys;
+        return;
+    }
+
+    // --- 1. 接收来自 Dealer 的随机数份额 ---
+    std::vector<B2A_Crypten_KeyPack> keys(size);
+    dealer->recv_b2a_crypten_keys(keys.data(), size);
+    peer->sync(); // 确保双方都接收完毕
+
+    // --- 2. 本地计算被屏蔽后的值 d 的 XOR 份额 ---
+    std::vector<uint8_t> d_shares(size);
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        d_shares[i] = x_shares[i] ^ keys[i].r_xor_share;
+    }
+
+    // --- 3. 交互一次，重构以公开 d ---
+    // reconstruct 函数会交换份额并相加/异或。我们需要一个XOR版本的reconstruct。
+    // 如果你的 reconstruct 是加性的，我们需要修改。假设 reconstruct_bool 存在。
+    // 为了简单，我们手动实现。
+    std::vector<uint8_t> d_other_shares(size);
+    if (party == SERVER) {
+        peer->send_uint8_array(d_shares.data(), size);
+        peer->recv_uint8_array(d_other_shares.data(), size);
+    } else { // CLIENT
+        peer->recv_uint8_array(d_other_shares.data(), size);
+        peer->send_uint8_array(d_shares.data(), size);
+    }
+    
+    uint8_t* d_public = new uint8_t[size];
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        d_public[i] = d_shares[i] ^ d_other_shares[i];
+    }
+    
+    // --- 4. 本地计算最终的加性份额 ---
+    // [y] = d + [r] - 2*d*[r]
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        GroupElement d_val = d_public[i];
+        GroupElement r_add_share = keys[i].r_add_share;
+        
+        // 实现 [d] 的份额: 一方持有d，另一方持有0
+        GroupElement d_add_share = (party == CLIENT) ? d_val : 0;
+        
+        // 计算 -2*d*[r] 的份额 (本地操作)
+        GroupElement term3_share = -2 * d_val * r_add_share;
+
+        y_shares[i] = d_add_share + r_add_share + term3_share;
+    }
+}
+
+void clip_with_relu(int32_t size,GroupElement *inArr,GroupElement *outArr, GroupElement upper, GroupElement lower){
+    GroupElement* clip_relu_in = new GroupElement[size * 2];
+    if(party == DEALER){
+        FastRelu(size * 2, clip_relu_in, clip_relu_in, clip_relu_in, clip_relu_in);
+    }else{        
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            if (party == SERVER) {
+                clip_relu_in[i]        = inArr[i] - upper;
+                clip_relu_in[i + size] = lower - inArr[i];
+            } else {
+                clip_relu_in[i]        = inArr[i];
+                clip_relu_in[i + size] = -inArr[i];
+            }
+        }
+
+        // GroupElement* temp = new GroupElement[size]; 
+        // memcpy(temp,inArr,size * sizeof(GroupElement));
+        // reconstruct(size, temp, bitlength);
+        // print_double_array("Original Plaintext 'input softmax'", party, size, temp, size);
+
+        // temp = new GroupElement[2*size]; 
+        // memcpy(temp,clip_relu_in,2 * size * sizeof(GroupElement));
+        // reconstruct(size*2, temp, bitlength);
+
+        
+        // print_array("Original Plaintext 'relu input'", party, size*2, temp, size*2);
+        // print_double_array("Original Plaintext 'relu input(double)'", party, size*2, temp, size*2);
+
+        GroupElement* clip_relu_out = new GroupElement[size * 2];
+        FastRelu(size * 2, clip_relu_in, nullptr, clip_relu_out, nullptr);
+
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            outArr[i] = inArr[i] + clip_relu_out[i + size] - clip_relu_out[i];
+        }
+        
+
+        //GroupElement* temp = new GroupElement[size]; 
+        //memcpy(temp,x,size * sizeof(GroupElement));
+        //reconstruct(size, temp, bitlength);
+        //print_double_array("Original Plaintext 'x'", party, size, temp, size);
+
+        delete[] clip_relu_in;
+        delete[] clip_relu_out;
+    }
+}
+
+void reconstruct_bool(int32_t size, uint8_t* arr)
+{
+    if (party == DEALER) return;
+
+    uint8_t* other_shares = new uint8_t[size];
+    if (party == SERVER) {
+        peer->send_uint8_array(arr, size);
+        peer->recv_uint8_array(other_shares, size);
+    } else { // CLIENT
+        peer->recv_uint8_array(other_shares, size);
+        peer->send_uint8_array(arr, size);
+    }
+
+    // 将份额异或起来得到明文
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        arr[i] = arr[i] ^ other_shares[i];
+    }
+    
+    delete[] other_shares;
+    
+    // 增加轮次计数，因为发生了一次交互
+    numRounds += 1; 
+}
+
+// =========================================================================
+// == 辅助函数: DPF三区间判断 (这个可以放在一个新文件 dpf_interval.cpp/h 中)
+// =========================================================================
+/**
+ * @brief 使用DPF安全地判断一个秘密值x相对于两个公开边界的位置。
+ *
+ * @param x_share 秘密输入x的加性份额。
+ * @param lower 公开下界。
+ * @param upper 公开上界。
+ * @return OneHotShares_xor 包含三个区间判断结果的XOR秘密份额。
+ */
+OneHotShares_xor dpf_three_interval_check(GroupElement x_share, GroupElement lower, GroupElement upper)
+{
+    GroupElement shift = double_to_fixed(1000.0,16);
+    const int bin = FSSConfig::bitlength;
+    OneHotShares_xor result;
+    x_share += shift/2;
+    lower+=shift;
+    upper+=shift;
+    // --- Dealer 逻辑 (保持不变) ---
+    if (party == DEALER) {
+        GroupElement alpha = prngs[0].get<GroupElement>() % (1ULL << bin);
+        alpha = 1024*64*1000;
+        auto key_pair = keyGenDPFET(bin, alpha);
+        auto alpha_split = splitShare(alpha, bin);
+        server->send_dpfet_keypack(key_pair.first);
+        client->send_dpfet_keypack(key_pair.second);
+        server->send_ge_array(&alpha_split.first, 1);
+        client->send_ge_array(&alpha_split.second, 1);
+        return {};
+    }
+
+    // --- 计算方逻辑 ---
+    
+    // a. 接收密钥和份额
+    auto my_key = dealer->recv_dpfet_keypack(bin);
+    GroupElement my_alpha_share;
+    dealer->recv_ge_array(&my_alpha_share, 1);
+
+    // b. 重构公开移位量 d = x - alpha
+    GroupElement d_share = x_share - my_alpha_share;
+    reconstruct(1, &d_share, bin);
+    GroupElement d = d_share;
+
+    // c. 准备比较的输入值
+    GroupElement C_lower = lower;
+    GroupElement lower_prime = C_lower - d;
+    
+    GroupElement C_upper = upper;
+    GroupElement upper_prime = C_upper - d;
+    
+    // 执行两次比较，得到XOR份额
+    uint8_t res_ge_lower_share = evalDPFET_LT(party-2, my_key, lower_prime);
+    uint8_t res_ge_upper_share = evalDPFET_LT(party-2, my_key, upper_prime);
+
+    // =======================================================
+    // ==         SIMPLE DEBUGGING PRINT BLOCK              ==
+    // =======================================================
+    peer->sync(); 
+
+    // --- 准备重构 ---
+    GroupElement temp_x = x_share;
+    GroupElement temp_alpha = my_alpha_share;
+    uint8_t temp_res_ge_lower = res_ge_lower_share;
+    uint8_t temp_res_ge_upper = res_ge_upper_share;
+
+    // --- 执行重构 ---
+    reconstruct(1, &temp_x, bin);
+    reconstruct(1, &temp_alpha, bin);
+    reconstruct_bool(1, &temp_res_ge_lower);
+    reconstruct_bool(1, &temp_res_ge_upper);
+
+    // --- 只让 SERVER 打印 ---
+    if (party == SERVER) {
+        const int scale = 16;
+        std::cout << "\n--- DEBUG (x=" << fixed_to_double(temp_x, scale) << ") ---" << std::endl;
+        std::cout << "x=" << (int64_t)temp_x << ", alpha=" << (int64_t)temp_alpha << ", d=" << (int64_t)d << std::endl;
+        std::cout << "[LOWER] lower'=" << (int64_t)lower_prime 
+                  << ", eval([alpha >= lower]): " << (int)temp_res_ge_lower 
+                  << " (Expected: " << ((int64_t)temp_alpha >= (int64_t)lower) << ")" << std::endl;
+        std::cout << "[UPPER] upper'=" << (int64_t)upper_prime 
+                  << ", eval([alpha >= upper]): " << (int)temp_res_ge_upper
+                  << " (Expected: " << ((int64_t)temp_alpha >= (int64_t)upper) << ")" << std::endl;
+        std::cout << "---------------------------\n" << std::endl;
+    }
+    // =======================================================
+
+    // d. 本地计算最终的独热编码XOR份额
+    result.s0_share = (party == SERVER) ? (1 ^ res_ge_lower_share) : res_ge_lower_share;
+    uint8_t res_lt_upper_share = (party == SERVER) ? (1 ^ res_ge_upper_share) : res_ge_upper_share;
+    result.s1_share = result.s0_share ^ res_lt_upper_share;
+    result.s2_share = (party == SERVER) ? (1 ^ res_lt_upper_share) : res_lt_upper_share;
+    
+    peer->sync();
+
+    return result;
+}
+
+
+// =========================================================================
+// == 最终的裁剪函数 (这个可以放在你的 protocol/clip.cpp 或类似文件中)
+// =========================================================================
+/**
+ * @brief 使用DPF三区间判断安全地将输入裁剪到 [lower, upper] 区间。
+ */
+void clip_with_dpf(
+    int32_t size,
+    GroupElement *inArr,
+    GroupElement *outArr,
+    GroupElement lower,
+    GroupElement upper)
+{
+    const int bin = FSSConfig::bitlength;
+
+    // --- Dealer 逻辑 ---
+    if (party == DEALER) {
+        // 1. 为 `dpf_three_interval_check` 准备密钥 (循环 size 次)
+        for (int i = 0; i < size; ++i) {
+            dpf_three_interval_check(0, 0, 0); // 传入虚拟参数来触发Dealer逻辑
+        }
+        GroupElement* dummy1 = new GroupElement[size];
+        GroupElement* dummy2 = new GroupElement[size];
+        uint8_t* dummy_int1 = new uint8_t[size * 3];
+        B2A_Crypten(size*3,dummy_int1,dummy1);
+        // 2. 为 `ElemWiseMul` 准备 Beaver 三元组
+        ElemWiseMul(size, dummy1, dummy1, dummy2, dummy2, dummy2, dummy2);
+        // 3. 设置输出掩码 (这里设为0，因为精确掩码难以计算)
+        return;
+    }
+
+    // --- 计算方逻辑 ---
+    GroupElement* temp = new GroupElement[size]; 
+    memcpy(temp, inArr, size * sizeof(GroupElement));
+    reconstruct(size, temp, bitlength);
+    print_double_array("Original Plaintext clip_with_dpf 'inArr'", party, size, temp, size);
+    // -- 准备批量处理的容器 --
+    uint8_t* s0_xor_shares = new uint8_t[size];
+    uint8_t* s1_xor_shares = new uint8_t[size];
+    uint8_t* s2_xor_shares = new uint8_t[size];
+
+    // -- 步骤 1: 批量 DPF 三区间判断 --
+    // 这个阶段包含多次网络通信 (reconstruct 'd')
+    for (int i = 0; i < size; ++i) {
+        OneHotShares_xor shares = dpf_three_interval_check(inArr[i], lower, upper);
+        s0_xor_shares[i] = shares.s0_share;
+        s1_xor_shares[i] = shares.s1_share;
+        s2_xor_shares[i] = shares.s2_share;
+    }
+    
+    // =======================================================
+    // ==             DEBUGGING PRINT BLOCK                 ==
+    // =======================================================
+    // 为了打印，我们需要同步双方，确保所有 DPF 判断都已完成
+    peer->sync(); 
+
+    // --- 打印输入 x 的明文 ---
+    GroupElement* temp_inArr = new GroupElement[size]; 
+    memcpy(temp_inArr, inArr, size * sizeof(GroupElement));
+    reconstruct(size, temp_inArr, bitlength); // 重构 x 的明文
+    
+    // --- 打印 s0, s1, s2 的明文 ---
+    uint8_t* temp_s0 = new uint8_t[size];
+    uint8_t* temp_s1 = new uint8_t[size];
+    uint8_t* temp_s2 = new uint8_t[size];
+    memcpy(temp_s0, s0_xor_shares, size * sizeof(uint8_t));
+    memcpy(temp_s1, s1_xor_shares, size * sizeof(uint8_t));
+    memcpy(temp_s2, s2_xor_shares, size * sizeof(uint8_t));
+
+    reconstruct_bool(size, temp_s0); // 重构 s0 的明文
+    reconstruct_bool(size, temp_s1); // 重构 s1 的明文
+    reconstruct_bool(size, temp_s2); // 重构 s2 的明文
+
+
+    std::cout << "\n--- [DEBUG] Intermediate values inside clip_with_dpf ---" << std::endl;
+    const int scale = 16; // 假设的小数位数
+    for (int i = 0; i < size && i < 10; ++i) { // 只打印前10个样本
+        std::cout << "  Sample " << i << ":" << std::endl;
+        std::cout << "    Input x (fixed) : " << (int64_t)temp_inArr[i] << std::endl;
+        std::cout << "    Input x (double): " << fixed_to_double(temp_inArr[i], scale) << std::endl;
+        std::cout << "    s0 [x < lower]  : " << (int)temp_s0[i] << std::endl;
+        std::cout << "    s1 [in range]   : " << (int)temp_s1[i] << std::endl;
+        std::cout << "    s2 [x >= upper] : " << (int)temp_s2[i] << std::endl;
+        std::cout << "    -----------------" << std::endl;
+    }
+    
+    delete[] temp_inArr;
+    delete[] temp_s0;
+    delete[] temp_s1;
+    delete[] temp_s2;
+
+    // 再次同步，确保打印/重构完成后再继续协议
+    peer->sync(); 
+    // =======================================================
+    // ==           END OF DEBUGGING PRINT BLOCK            ==
+    // =======================================================
+
+    // -- 步骤 2: 批量 B2A 转换 --
+    // B2A 内部处理通信
+    uint8_t* all_bool_shares = new uint8_t[size * 3];
+    memcpy(all_bool_shares, s0_xor_shares, size * sizeof(uint8_t));
+    memcpy(all_bool_shares + size, s1_xor_shares, size * sizeof(uint8_t));
+    memcpy(all_bool_shares + size * 2, s2_xor_shares, size * sizeof(uint8_t));
+    
+    GroupElement* all_add_shares = new GroupElement[size * 3];
+    
+
+    for (int i = 0; i < size*3 ; ++i) { // 检查前10个
+        std::cout << "   " << i << ":"
+        << " XOR share value = " << (int)temp_s0_xor[i]
+        << ", ADD share value = " << (int64_t)temp_s0_add[i]
+        << " -> " << (match ? "MATCH" : "MISMATCH!")
+        << std::endl;
+    }
+
+    // (修正类型匹配错误)
+    B2A_Crypten(size * 3, all_bool_shares, all_add_shares);
+    
+    GroupElement* s0_add_shares = all_add_shares;
+    GroupElement* s1_add_shares = all_add_shares + size;
+    GroupElement* s2_add_shares = all_add_shares + size * 2;
+
+     // =======================================================
+    // ==           PHASE 2 DEBUG: B2A CHECK                ==
+    // =======================================================
+    peer->sync();
+
+    // --- 准备重构 ---
+    // 拷贝XOR份额 (用于对比)
+    uint8_t* temp_s0_xor = new uint8_t[size*3];
+    memcpy(temp_s0_xor, all_bool_shares, size * sizeof(uint8_t));
+    
+    // 拷贝B2A转换后的ADD份额
+    GroupElement* temp_s0_add = new GroupElement[size*3];
+    memcpy(temp_s0_add, all_add_shares, size * sizeof(GroupElement));
+
+    // --- 执行重构 ---
+    reconstruct_bool(size*3, temp_s0_xor); // 重构XOR份额的明文
+    reconstruct(size*3, temp_s0_add, bitlength); // 重构ADD份额的明文
+
+    // --- 只让 SERVER 打印 ---
+    if (party == SERVER) {
+        std::cout << "\n--- [DEBUG] Verifying B2A Conversion for s0 ---" << std::endl;
+        bool all_match = true;
+        for (int i = 0; i < size*3 ; ++i) { // 检查前10个
+            bool match = (temp_s0_xor[i] == temp_s0_add[i]);
+            std::cout << "  Sample " << i << ":"
+                      << " XOR share value = " << (int)temp_s0_xor[i]
+                      << ", ADD share value = " << (int64_t)temp_s0_add[i]
+                      << " -> " << (match ? "MATCH" : "MISMATCH!")
+                      << std::endl;
+            if (!match) all_match = false;
+        }
+        if (all_match) {
+            std::cout << "  B2A for s0 seems to be working correctly." << std::endl;
+        } else {
+            std::cout << "  ERROR: B2A for s0 has issues!" << std::endl;
+        }
+        std::cout << "-------------------------------------------------\n" << std::endl;
+    }
+
+    delete[] temp_s0_xor;
+    delete[] temp_s0_add;
+
+    peer->sync();
+    // =======================================================
+    // ==         END OF PHASE 2 DEBUGGING BLOCK            ==
+    // =======================================================
+
+    // -- 步骤 3: 安全算术计算 --
+    
+    // a. 计算 [s1 * x]
+    GroupElement* term1_add_shares = new GroupElement[size];
+    // ElemWiseMul 内部处理通信
+    ElemWiseMul(size, s1_add_shares, nullptr, inArr, nullptr, term1_add_shares, nullptr);
+
+    // b. 本地组合最终结果
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        // [s0 * lower] (本地操作)
+        GroupElement term0_add_share = s0_add_shares[i] * lower;
+        
+        // [s2 * upper] (本地操作)
+        GroupElement term2_add_share = s2_add_shares[i] * upper;
+        
+        // [res] = [s0*l] + [s1*x] + [s2*u] (本地操作)
+        outArr[i] = term0_add_share + term1_add_shares[i] + term2_add_share;
+    }
+    temp = new GroupElement[size]; 
+    memcpy(temp, outArr, size * sizeof(GroupElement));
+    reconstruct(size, temp, bitlength);
+    print_double_array("Original Plaintext clip_with_dpf 'outArr'", party, size, temp, size);
 }
 
 void SoftmaxODE(int32_t size, 
@@ -2515,6 +2971,9 @@ void SoftmaxODE(int32_t size,
 {
     // === 0. Dealer 直接退出 ===
     const int scale = 16; 
+    GroupElement upper = (12LL << scale);
+    GroupElement lower = (-4LL << scale);
+
     if (party == DEALER) {
         // Dealer 的代码是线上计算的“蓝图”，它为每一个安全协议调用生成密钥。
         // 它不关心变量的真实值，只关心操作的类型和尺寸。
@@ -2526,7 +2985,8 @@ void SoftmaxODE(int32_t size,
 
         // 对应在线代码的步骤 2: (可选) 安全裁剪
         if (clip) {
-            FastRelu(size * 2, dummy_double_size, dummy_double_size, dummy_double_size, dummy_double_size);
+            //clip_with_relu(size,inArr,outArr,upper,lower);
+            clip_with_dpf(size,inArr,outArr,lower,upper);
         }
 
         // 对应在线代码的步骤 3: 初始化 x = x / iter_num
@@ -2559,56 +3019,14 @@ void SoftmaxODE(int32_t size,
     }
 
     // === 1. 初始化和参数设置 (仅计算方执行) ===
-    
-    GroupElement upper = (12LL << scale);
-    GroupElement lower = (-4LL << scale);
 
     GroupElement* x = new GroupElement[size];
     memcpy(x, inArr, size * sizeof(GroupElement));
 
     // === 2. (可选) 高效安全裁剪 ===
     if (clip) {
-        GroupElement* clip_relu_in = new GroupElement[size * 2];
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            if (party == SERVER) {
-                clip_relu_in[i]        = inArr[i] - upper;
-                clip_relu_in[i + size] = lower - inArr[i];
-            } else {
-                clip_relu_in[i]        = inArr[i];
-                clip_relu_in[i + size] = -inArr[i];
-            }
-        }
-
-        // GroupElement* temp = new GroupElement[size]; 
-        // memcpy(temp,inArr,size * sizeof(GroupElement));
-        // reconstruct(size, temp, bitlength);
-        // print_double_array("Original Plaintext 'input softmax'", party, size, temp, size);
-
-        // temp = new GroupElement[2*size]; 
-        // memcpy(temp,clip_relu_in,2 * size * sizeof(GroupElement));
-        // reconstruct(size*2, temp, bitlength);
-
-        
-        // print_array("Original Plaintext 'relu input'", party, size*2, temp, size*2);
-        // print_double_array("Original Plaintext 'relu input(double)'", party, size*2, temp, size*2);
-
-        GroupElement* clip_relu_out = new GroupElement[size * 2];
-        FastRelu(size * 2, clip_relu_in, nullptr, clip_relu_out, nullptr);
-
-        #pragma omp parallel for
-        for (int i = 0; i < size; ++i) {
-            x[i] = inArr[i] + clip_relu_out[i + size] - clip_relu_out[i];
-        }
-        
-
-        //GroupElement* temp = new GroupElement[size]; 
-        //memcpy(temp,x,size * sizeof(GroupElement));
-        //reconstruct(size, temp, bitlength);
-        //print_double_array("Original Plaintext 'x'", party, size, temp, size);
-
-        delete[] clip_relu_in;
-        delete[] clip_relu_out;
+        //clip_with_relu(size,inArr,x,upper,lower);
+        clip_with_dpf(size,inArr,x,lower,upper);
     }
     
     //GroupElement* temp_x = new GroupElement[size]; 

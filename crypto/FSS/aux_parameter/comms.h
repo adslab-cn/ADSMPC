@@ -329,6 +329,8 @@ public:
     void send_fast_relu_key(const FastReluKeyPack &kp);
 
     void send_ars_crypten_key(const ARS_CrypTen_Style_KeyPack &kp);
+
+    void send_b2a_crypten_keys(const B2A_Crypten_KeyPack* keys, int32_t size);
 };
 
 Peer* waitForPeer(int port); // 服务器等待客户端连接
@@ -480,4 +482,6 @@ public:
     FastReluKeyPack recv_fast_relu_key(int Bin, int Bout);
 
     ARS_CrypTen_Style_KeyPack recv_ars_crypten_key();
+
+    void recv_b2a_crypten_keys(B2A_Crypten_KeyPack* keys, int32_t size);
 };
