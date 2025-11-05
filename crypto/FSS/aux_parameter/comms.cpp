@@ -23,8 +23,8 @@ void print_socket_info(const std::string& name, int sockfd) {
         char local_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &local_addr.sin_addr, local_ip, sizeof(local_ip));
         int local_port = ntohs(local_addr.sin_port);
-        std::cerr << "  Socket '" << name << "' (fd=" << sockfd << "):" << std::endl;
-        std::cerr << "    Local Address : " << local_ip << ":" << local_port << std::endl;
+        //std::cerr << "  Socket '" << name << "' (fd=" << sockfd << "):" << std::endl;
+        //std::cerr << "    Local Address : " << local_ip << ":" << local_port << std::endl;
     }
 
     // 获取远端地址
@@ -32,7 +32,7 @@ void print_socket_info(const std::string& name, int sockfd) {
         char peer_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &peer_addr.sin_addr, peer_ip, sizeof(peer_ip));
         int peer_port = ntohs(peer_addr.sin_port);
-        std::cerr << "    Peer Address  : " << peer_ip << ":" << peer_port << std::endl;
+        //std::cerr << "    Peer Address  : " << peer_ip << ":" << peer_port << std::endl;
     }
 }
 SocketBuf::SocketBuf(std::string ip, int port, bool onlyRecv = false)

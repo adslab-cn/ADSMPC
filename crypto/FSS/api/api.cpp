@@ -2461,8 +2461,8 @@ void FastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupEleme
 
         // 2. 交互一次以重构 masked_x
         reconstruct(size, masked_x, bitlength);
-        print_array("Original Plaintext 'x+r'", party, size, masked_x,size);
-        print_double_array("Original Plaintext(double) 'x+r'", party, size, masked_x,size);
+        //print_array("Original Plaintext 'x+r'", party, size, masked_x,size);
+        //print_double_array("Original Plaintext(double) 'x+r'", party, size, masked_x,size);
         // 3. 本地计算 FSS 并得到系数分享
         GroupElement* coeff_shares = new GroupElement[size * 2]; // 存储所有b0, b1的分享
         
@@ -2598,7 +2598,7 @@ void B2A_Crypten(int32_t size, const uint8_t* x_shares, GroupElement* y_shares)
     }
 }
 
-void clip_with_relu(int32_t size,GroupElement *inArr,GroupElement *outArr, GroupElement upper, GroupElement lower){
+void clip_with_relu(int32_t size,GroupElement *inArr,GroupElement *outArr, GroupElement lower, GroupElement upper){
     GroupElement* clip_relu_in = new GroupElement[size * 2];
     if(party == DEALER){
         FastRelu(size * 2, clip_relu_in, clip_relu_in, clip_relu_in, clip_relu_in);
@@ -2729,33 +2729,33 @@ OneHotShares_xor dpf_three_interval_check(GroupElement x_share, GroupElement low
     // =======================================================
     // ==         SIMPLE DEBUGGING PRINT BLOCK              ==
     // =======================================================
-    peer->sync(); 
+    // peer->sync(); 
 
-    // --- 准备重构 ---
-    GroupElement temp_x = x_share;
-    GroupElement temp_alpha = my_alpha_share;
-    uint8_t temp_res_ge_lower = res_ge_lower_share;
-    uint8_t temp_res_ge_upper = res_ge_upper_share;
+    // // --- 准备重构 ---
+    // GroupElement temp_x = x_share;
+    // GroupElement temp_alpha = my_alpha_share;
+    // uint8_t temp_res_ge_lower = res_ge_lower_share;
+    // uint8_t temp_res_ge_upper = res_ge_upper_share;
 
-    // --- 执行重构 ---
-    reconstruct(1, &temp_x, bin);
-    reconstruct(1, &temp_alpha, bin);
-    reconstruct_bool(1, &temp_res_ge_lower);
-    reconstruct_bool(1, &temp_res_ge_upper);
+    // // --- 执行重构 ---
+    // reconstruct(1, &temp_x, bin);
+    // reconstruct(1, &temp_alpha, bin);
+    // reconstruct_bool(1, &temp_res_ge_lower);
+    // reconstruct_bool(1, &temp_res_ge_upper);
 
-    // --- 只让 SERVER 打印 ---
-    if (party == SERVER) {
-        const int scale = 16;
-        std::cout << "\n--- DEBUG (x=" << fixed_to_double(temp_x, scale) << ") ---" << std::endl;
-        std::cout << "x=" << (int64_t)temp_x << ", alpha=" << (int64_t)temp_alpha << ", d=" << (int64_t)d << std::endl;
-        std::cout << "[LOWER] lower'=" << (int64_t)lower_prime 
-                  << ", eval([alpha >= lower]): " << (int)temp_res_ge_lower 
-                  << " (Expected: " << ((int64_t)temp_alpha >= (int64_t)lower) << ")" << std::endl;
-        std::cout << "[UPPER] upper'=" << (int64_t)upper_prime 
-                  << ", eval([alpha >= upper]): " << (int)temp_res_ge_upper
-                  << " (Expected: " << ((int64_t)temp_alpha >= (int64_t)upper) << ")" << std::endl;
-        std::cout << "---------------------------\n" << std::endl;
-    }
+    // // --- 只让 SERVER 打印 ---
+    // if (party == SERVER) {
+    //     const int scale = 16;
+    //     std::cout << "\n--- DEBUG (x=" << fixed_to_double(temp_x, scale) << ") ---" << std::endl;
+    //     std::cout << "x=" << (int64_t)temp_x << ", alpha=" << (int64_t)temp_alpha << ", d=" << (int64_t)d << std::endl;
+    //     std::cout << "[LOWER] lower'=" << (int64_t)lower_prime 
+    //               << ", eval([alpha >= lower]): " << (int)temp_res_ge_lower 
+    //               << " (Expected: " << ((int64_t)temp_alpha >= (int64_t)lower) << ")" << std::endl;
+    //     std::cout << "[UPPER] upper'=" << (int64_t)upper_prime 
+    //               << ", eval([alpha >= upper]): " << (int)temp_res_ge_upper
+    //               << " (Expected: " << ((int64_t)temp_alpha >= (int64_t)upper) << ")" << std::endl;
+    //     std::cout << "---------------------------\n" << std::endl;
+    // }
     // =======================================================
 
     // d. 本地计算最终的独热编码XOR份额
@@ -2781,7 +2781,8 @@ void clip_with_dpf(
     GroupElement *inArr,
     GroupElement *outArr,
     GroupElement lower,
-    GroupElement upper)
+    GroupElement upper,
+    int scale)
 {
     const int bin = FSSConfig::bitlength;
 
@@ -2801,11 +2802,11 @@ void clip_with_dpf(
         return;
     }
 
-    // --- 计算方逻辑 ---
-    GroupElement* temp = new GroupElement[size]; 
-    memcpy(temp, inArr, size * sizeof(GroupElement));
-    reconstruct(size, temp, bitlength);
-    print_double_array("Original Plaintext clip_with_dpf 'inArr'", party, size, temp, size);
+    // // --- 计算方逻辑 ---
+    // GroupElement* temp = new GroupElement[size]; 
+    // memcpy(temp, inArr, size * sizeof(GroupElement));
+    // reconstruct(size, temp, bitlength);
+    // print_double_array("Original Plaintext clip_with_dpf 'inArr'", party, size, temp, size);
     // -- 准备批量处理的容器 --
     uint8_t* s0_xor_shares = new uint8_t[size];
     uint8_t* s1_xor_shares = new uint8_t[size];
@@ -2823,46 +2824,46 @@ void clip_with_dpf(
     // =======================================================
     // ==             DEBUGGING PRINT BLOCK                 ==
     // =======================================================
-    // 为了打印，我们需要同步双方，确保所有 DPF 判断都已完成
-    peer->sync(); 
+    // // 为了打印，我们需要同步双方，确保所有 DPF 判断都已完成
+    // peer->sync(); 
 
-    // --- 打印输入 x 的明文 ---
-    GroupElement* temp_inArr = new GroupElement[size]; 
-    memcpy(temp_inArr, inArr, size * sizeof(GroupElement));
-    reconstruct(size, temp_inArr, bitlength); // 重构 x 的明文
+    // // --- 打印输入 x 的明文 ---
+    // GroupElement* temp_inArr = new GroupElement[size]; 
+    // memcpy(temp_inArr, inArr, size * sizeof(GroupElement));
+    // reconstruct(size, temp_inArr, bitlength); // 重构 x 的明文
     
-    // --- 打印 s0, s1, s2 的明文 ---
-    uint8_t* temp_s0 = new uint8_t[size];
-    uint8_t* temp_s1 = new uint8_t[size];
-    uint8_t* temp_s2 = new uint8_t[size];
-    memcpy(temp_s0, s0_xor_shares, size * sizeof(uint8_t));
-    memcpy(temp_s1, s1_xor_shares, size * sizeof(uint8_t));
-    memcpy(temp_s2, s2_xor_shares, size * sizeof(uint8_t));
+    // // --- 打印 s0, s1, s2 的明文 ---
+    // uint8_t* temp_s0 = new uint8_t[size];
+    // uint8_t* temp_s1 = new uint8_t[size];
+    // uint8_t* temp_s2 = new uint8_t[size];
+    // memcpy(temp_s0, s0_xor_shares, size * sizeof(uint8_t));
+    // memcpy(temp_s1, s1_xor_shares, size * sizeof(uint8_t));
+    // memcpy(temp_s2, s2_xor_shares, size * sizeof(uint8_t));
 
-    reconstruct_bool(size, temp_s0); // 重构 s0 的明文
-    reconstruct_bool(size, temp_s1); // 重构 s1 的明文
-    reconstruct_bool(size, temp_s2); // 重构 s2 的明文
+    // reconstruct_bool(size, temp_s0); // 重构 s0 的明文
+    // reconstruct_bool(size, temp_s1); // 重构 s1 的明文
+    // reconstruct_bool(size, temp_s2); // 重构 s2 的明文
 
 
-    std::cout << "\n--- [DEBUG] Intermediate values inside clip_with_dpf ---" << std::endl;
-    const int scale = 16; // 假设的小数位数
-    for (int i = 0; i < size && i < 10; ++i) { // 只打印前10个样本
-        std::cout << "  Sample " << i << ":" << std::endl;
-        std::cout << "    Input x (fixed) : " << (int64_t)temp_inArr[i] << std::endl;
-        std::cout << "    Input x (double): " << fixed_to_double(temp_inArr[i], scale) << std::endl;
-        std::cout << "    s0 [x < lower]  : " << (int)temp_s0[i] << std::endl;
-        std::cout << "    s1 [in range]   : " << (int)temp_s1[i] << std::endl;
-        std::cout << "    s2 [x >= upper] : " << (int)temp_s2[i] << std::endl;
-        std::cout << "    -----------------" << std::endl;
-    }
+    // std::cout << "\n--- [DEBUG] Intermediate values inside clip_with_dpf ---" << std::endl;
+    // const int scale = 16; // 假设的小数位数
+    // for (int i = 0; i < size && i < 10; ++i) { // 只打印前10个样本
+    //     std::cout << "  Sample " << i << ":" << std::endl;
+    //     std::cout << "    Input x (fixed) : " << (int64_t)temp_inArr[i] << std::endl;
+    //     std::cout << "    Input x (double): " << fixed_to_double(temp_inArr[i], scale) << std::endl;
+    //     std::cout << "    s0 [x < lower]  : " << (int)temp_s0[i] << std::endl;
+    //     std::cout << "    s1 [in range]   : " << (int)temp_s1[i] << std::endl;
+    //     std::cout << "    s2 [x >= upper] : " << (int)temp_s2[i] << std::endl;
+    //     std::cout << "    -----------------" << std::endl;
+    // }
     
-    delete[] temp_inArr;
-    delete[] temp_s0;
-    delete[] temp_s1;
-    delete[] temp_s2;
+    // delete[] temp_inArr;
+    // delete[] temp_s0;
+    // delete[] temp_s1;
+    // delete[] temp_s2;
 
-    // 再次同步，确保打印/重构完成后再继续协议
-    peer->sync(); 
+    // // 再次同步，确保打印/重构完成后再继续协议
+    // peer->sync(); 
     // =======================================================
     // ==           END OF DEBUGGING PRINT BLOCK            ==
     // =======================================================
@@ -2874,65 +2875,101 @@ void clip_with_dpf(
     memcpy(all_bool_shares + size, s1_xor_shares, size * sizeof(uint8_t));
     memcpy(all_bool_shares + size * 2, s2_xor_shares, size * sizeof(uint8_t));
     
+    // for(int i = 0;i<size;i++){
+    //     all_bool_shares[i] = s0_xor_shares[i];
+    //     all_bool_shares[i+size] = s1_xor_shares[i];
+    //     all_bool_shares[i+2*size] = s2_xor_shares[i];
+    // }
+
     GroupElement* all_add_shares = new GroupElement[size * 3];
     
+    // temp_s0 = new uint8_t[size];
+    // temp_s1 = new uint8_t[size];
+    // temp_s2 = new uint8_t[size];
 
-    for (int i = 0; i < size*3 ; ++i) { // 检查前10个
-        std::cout << "   " << i << ":"
-        << " XOR share value = " << (int)temp_s0_xor[i]
-        << ", ADD share value = " << (int64_t)temp_s0_add[i]
-        << " -> " << (match ? "MATCH" : "MISMATCH!")
-        << std::endl;
-    }
+    // memcpy(temp_s0,s0_xor_shares,size*sizeof(uint8_t));
+    // memcpy(temp_s1,s1_xor_shares,size*sizeof(uint8_t));
+    // memcpy(temp_s2,s2_xor_shares,size*sizeof(uint8_t));
+
+    // reconstruct_bool(size,temp_s0);
+    // reconstruct_bool(size,temp_s1);
+    // reconstruct_bool(size,temp_s2);
+
+    // for (int i = 0; i < size ; ++i) { // 检查前10个
+    //     std::cout << "   " << i << ":"
+    //     << " s0 XOR share value = " << (int)temp_s0[i]
+    //     << std::endl;
+    // }
+    //  for (int i = 0; i < size ; ++i) { // 检查前10个
+    //     std::cout << "   " << i << ":"
+    //     << " s1 XOR share value = " << (int)temp_s1[i]
+    //     << std::endl;
+    // }
+    //  for (int i = 0; i < size ; ++i) { // 检查前10个
+    //     std::cout << "   " << i << ":"
+    //     << " s2 XOR share value = " << (int)temp_s2[i]
+    //     << std::endl;
+    // }
 
     // (修正类型匹配错误)
     B2A_Crypten(size * 3, all_bool_shares, all_add_shares);
+
+    #pragma omp parallel for
+    for (int i = size; i < size*2; ++i) {
+        all_add_shares[i] = all_add_shares[i] << scale;
+    }
     
     GroupElement* s0_add_shares = all_add_shares;
     GroupElement* s1_add_shares = all_add_shares + size;
     GroupElement* s2_add_shares = all_add_shares + size * 2;
 
+    // for(int i=0;i<size;i++){
+    //     s0_add_shares[i] = all_add_shares[i];
+    //     s1_add_shares[i] = all_add_shares[i+size];
+    //     s2_add_shares[i] = all_add_shares[i+2*size];
+    // }
+
      // =======================================================
     // ==           PHASE 2 DEBUG: B2A CHECK                ==
     // =======================================================
-    peer->sync();
+    // peer->sync();
 
-    // --- 准备重构 ---
-    // 拷贝XOR份额 (用于对比)
-    uint8_t* temp_s0_xor = new uint8_t[size*3];
-    memcpy(temp_s0_xor, all_bool_shares, size * sizeof(uint8_t));
+    // // --- 准备重构 ---
+    // // 拷贝XOR份额 (用于对比)
+    // uint8_t* temp_all_xor = new uint8_t[size*3];
+    // memcpy(temp_all_xor, all_bool_shares,3 * size * sizeof(uint8_t));
     
-    // 拷贝B2A转换后的ADD份额
-    GroupElement* temp_s0_add = new GroupElement[size*3];
-    memcpy(temp_s0_add, all_add_shares, size * sizeof(GroupElement));
+    // // 拷贝B2A转换后的ADD份额
+    // GroupElement* temp_all_add = new GroupElement[size*3];
+    // memcpy(temp_all_add, all_add_shares, 3*size * sizeof(GroupElement));
 
-    // --- 执行重构 ---
-    reconstruct_bool(size*3, temp_s0_xor); // 重构XOR份额的明文
-    reconstruct(size*3, temp_s0_add, bitlength); // 重构ADD份额的明文
+    // // --- 执行重构 ---
+    // reconstruct_bool(size*3, temp_all_xor); // 重构XOR份额的明文
+    // reconstruct(size*3, temp_all_add, bitlength); // 重构ADD份额的明文
 
-    // --- 只让 SERVER 打印 ---
-    if (party == SERVER) {
-        std::cout << "\n--- [DEBUG] Verifying B2A Conversion for s0 ---" << std::endl;
-        bool all_match = true;
-        for (int i = 0; i < size*3 ; ++i) { // 检查前10个
-            bool match = (temp_s0_xor[i] == temp_s0_add[i]);
-            std::cout << "  Sample " << i << ":"
-                      << " XOR share value = " << (int)temp_s0_xor[i]
-                      << ", ADD share value = " << (int64_t)temp_s0_add[i]
-                      << " -> " << (match ? "MATCH" : "MISMATCH!")
-                      << std::endl;
-            if (!match) all_match = false;
-        }
-        if (all_match) {
-            std::cout << "  B2A for s0 seems to be working correctly." << std::endl;
-        } else {
-            std::cout << "  ERROR: B2A for s0 has issues!" << std::endl;
-        }
-        std::cout << "-------------------------------------------------\n" << std::endl;
-    }
+    // // --- 只让 SERVER 打印 ---
+    // if (party == SERVER) {
+    //     std::cout << "\n--- [DEBUG] Verifying B2A Conversion for s0 ---" << std::endl;
+    //     bool all_match = true;
+    //     for (int i = 0; i < size*3 ; ++i) { // 检查前10个
+    //         bool match = (temp_all_xor[i] == temp_all_add[i]);
+    //         std::cout << "  Sample " << i << ":"
+    //                   << " XOR share value = " << (int)temp_all_xor[i]
+    //                   << ", ADD share value = " << (int64_t)temp_all_add[i]
+    //                   << " -> " << (match ? "MATCH" : "MISMATCH!")
+    //                   << std::endl;
+    //         if (!match) all_match = false;
+    //     }
+    //     if (all_match) {
+    //         std::cout << "  B2A for s0 seems to be working correctly." << std::endl;
+    //     } else {
+    //         std::cout << "  ERROR: B2A for s0 has issues!" << std::endl;
+    //     }
+    //     std::cout << "-------------------------------------------------\n" << std::endl;
+    // }
 
-    delete[] temp_s0_xor;
-    delete[] temp_s0_add;
+    // delete[] temp_all_xor;
+    // delete[] temp_all_add;
 
     peer->sync();
     // =======================================================
@@ -2946,6 +2983,22 @@ void clip_with_dpf(
     // ElemWiseMul 内部处理通信
     ElemWiseMul(size, s1_add_shares, nullptr, inArr, nullptr, term1_add_shares, nullptr);
 
+    // GroupElement *temp1 = new GroupElement[size];
+    // GroupElement *temp2 = new GroupElement[size];
+    // GroupElement *temp3 = new GroupElement[size];
+
+    // memcpy(temp1,s1_add_shares,size*sizeof(GroupElement));
+    // memcpy(temp2,inArr,size*sizeof(GroupElement));
+    // memcpy(temp3,term1_add_shares,size*sizeof(GroupElement));
+
+    // reconstruct(size,temp1,bitlength);
+    // reconstruct(size,temp2,bitlength);
+    // reconstruct(size,temp3,bitlength);
+
+    // print_double_array("testing s1 add share",party,size,temp1,size);
+    // print_double_array("testing inArr",party,size,temp2,size);
+    // print_double_array("testing term1 ",party,size,temp3,size);
+
     // b. 本地组合最终结果
     #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
@@ -2958,10 +3011,10 @@ void clip_with_dpf(
         // [res] = [s0*l] + [s1*x] + [s2*u] (本地操作)
         outArr[i] = term0_add_share + term1_add_shares[i] + term2_add_share;
     }
-    temp = new GroupElement[size]; 
-    memcpy(temp, outArr, size * sizeof(GroupElement));
-    reconstruct(size, temp, bitlength);
-    print_double_array("Original Plaintext clip_with_dpf 'outArr'", party, size, temp, size);
+    // temp = new GroupElement[size]; 
+    // memcpy(temp, outArr, size * sizeof(GroupElement));
+    // reconstruct(size, temp, bitlength);
+    // print_double_array("Original Plaintext clip_with_dpf 'outArr'", party, size, temp, size);
 }
 
 void SoftmaxODE(int32_t size, 
@@ -2985,8 +3038,8 @@ void SoftmaxODE(int32_t size,
 
         // 对应在线代码的步骤 2: (可选) 安全裁剪
         if (clip) {
-            //clip_with_relu(size,inArr,outArr,upper,lower);
-            clip_with_dpf(size,inArr,outArr,lower,upper);
+            //clip_with_relu(size,inArr,outArr,lower,upper);
+            clip_with_dpf(size,inArr,outArr,lower,upper,scale);
         }
 
         // 对应在线代码的步骤 3: 初始化 x = x / iter_num
@@ -3025,8 +3078,8 @@ void SoftmaxODE(int32_t size,
 
     // === 2. (可选) 高效安全裁剪 ===
     if (clip) {
-        //clip_with_relu(size,inArr,x,upper,lower);
-        clip_with_dpf(size,inArr,x,lower,upper);
+        //clip_with_relu(size,inArr,x,lower,upper);
+        clip_with_dpf(size,inArr,x,lower,upper,scale);
     }
     
     //GroupElement* temp_x = new GroupElement[size]; 

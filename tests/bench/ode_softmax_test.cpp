@@ -6,13 +6,35 @@
 #include <algorithm>
 #include "../../nn/backend/FSS_extended.h"
 #include "../../crypto/FSS/api/api.h"
+#include <random>
+#include <iomanip> // 为了 std::fixed 和 std::setprecision
 
 // --- 辅助函数 ---
+std::vector<double> generate_random_double_array(size_t size, double min_val, double max_val) {
+    std::vector<double> data;
+    data.reserve(size); // 预分配内存以提高效率
 
+    // 1. 初始化随机数生成器
+    // 使用 std::random_device 获取一个真实的硬件随机种子
+    std::random_device rd;  
+    // 使用 Mersenne Twister 算法作为随机数引擎，并用硬件种子初始化
+    std::mt19937 gen(rd()); 
+
+    // 2. 定义一个均匀分布
+    // std::uniform_real_distribution 会在 [min_val, max_val] 区间内生成均匀分布的浮点数
+    std::uniform_real_distribution<> distrib(min_val, max_val);
+
+    // 3. 循环生成数据
+    for (size_t i = 0; i < size; ++i) {
+        data.push_back(distrib(gen));
+    }
+
+    return data;
+}
 // 打印 double 数组
-void print_double_array(const std::string& title, const std::vector<double>& arr) {
+void print_double_array(const std::string& title, const std::vector<double>& arr,int limit = 10) {
     std::cout << "\n--- " << title << " ---" << std::endl;
-    for (size_t i = 0; i < arr.size(); ++i) {
+    for (size_t i = 0; i < arr.size()&&i<limit; ++i) {
         std::cout << "  [" << i << "]: " << arr[i] << std::endl;
     }
 }
@@ -43,20 +65,20 @@ void plaintext_softmax_ode(
 
     // 3. 初始化 g
     std::vector<double> g(size, 1.0 / size);
-    print_double_array("g0",g);
+    //print_double_array("g0",g);
     // 4. 迭代
     for (int k = 0; k < iter_num; ++k) {
         double dot_prod = 0.0;
         for (int i = 0; i < size; ++i) {
             dot_prod += g[i] * x[i];
-            std::cout<<g[i]<<"*"<<x[i]<<"="<< g[i] * x[i]<<" dotprod= "<<dot_prod<<std::endl;
+            //std::cout<<g[i]<<"*"<<x[i]<<"="<< g[i] * x[i]<<" dotprod= "<<dot_prod<<std::endl;
         }
         
         for (int i = 0; i < size; ++i) {
             g[i] += (x[i] - dot_prod) * g[i];
         }
-        std::cout<<"g"<<k<<std::endl;
-        print_double_array("g",g);
+        //std::cout<<"g"<<k<<std::endl;
+        //print_double_array("g",g);
     }
     output = g;
 }
@@ -79,7 +101,7 @@ void test_softmax_ode(int party) {
     
 
     // --- 2. 准备数据 ---
-    const int size =8;
+    const int size =2048;
     const int scale = 16;
     const int iter_num = 16; // 必须是2的幂
     const bool clip = true;
@@ -89,10 +111,13 @@ void test_softmax_ode(int party) {
     std::vector<double> plain_input_double(size);
     std::vector<GroupElement> plain_input_fixed(size);
 
-    if (party != DEALER) {
+    if (party ==SERVER) {
+        double min_value = -20.0;
+        double max_value = 20.0;
         // 创建一些包含极端值的数据
-        plain_input_double = {-20.0, -3.0, 0.0, 1.0, 2.5, 10.0, 15.0, 0.5};
+        //plain_input_double = {-20.0, -3.0, 0.0, 1.0, 2.5, 10.0, 15.0, 0.5};
         //plain_input_double = {-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654,-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654,-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654,-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654};
+        plain_input_double = generate_random_double_array(size, min_value, max_value);
         //-4 -3 0 1 2.5 10 12 0.5
         //0.125
         //-0.5 -0.375 0 0.125 0.3125 1.25 1.5 0.0625
@@ -103,14 +128,14 @@ void test_softmax_ode(int party) {
 
     // --- 3. 计算期望结果 ---
     std::vector<double> expected_output_double(size);
-    if (party != DEALER) {
+    if (party == SERVER) {
         plaintext_softmax_ode(plain_input_double, expected_output_double, iter_num, clip, lower_bound, upper_bound);
         print_double_array("Plaintext Input (double)", plain_input_double);
         print_double_array("Expected Plaintext Output (double, after ODE)", expected_output_double);
     }
 
     // --- 4. 秘密分享 ---
-    print_double_array("input_restored",party,size,plain_input_fixed.data(),size);
+    print_double_array("input_restored",party,size,plain_input_fixed.data(),10);
     GroupElement* input_shares = new GroupElement[size]();
     if(party != DEALER)
         SecretShare(size, plain_input_fixed.data(), input_shares, SERVER);
@@ -125,7 +150,7 @@ void test_softmax_ode(int party) {
 
     FSS::end();
 
-        auto end_time = std::chrono::high_resolution_clock::now();
+    auto end_time = std::chrono::high_resolution_clock::now();
 
     // 4. 计算时间差并打印
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -136,9 +161,11 @@ void test_softmax_ode(int party) {
         std::cout << "Total execution time: " << duration.count() / 1000.0 << " seconds" << std::endl;
         std::cout << "================================================" << std::endl;
     // --- 6. 重构与验证 ---
-    if (party != DEALER) {
+    if(party!=DEALER){
         std::cout << "\n   Party " << party << ": Reconstructing final output..." << std::endl;
         reconstruct(size, output_shares, FSSConfig::bitlength);
+    }
+    if (party == SERVER) {
         
         std::vector<double> mpc_output_double(size);
         for (int i = 0; i < size; ++i) {
