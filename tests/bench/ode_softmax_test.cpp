@@ -102,6 +102,7 @@ void test_softmax_ode(int party) {
 
     // --- 2. 准备数据 ---
     const int size =2048;
+    //const int size =8;
     const int scale = 16;
     const int iter_num = 16; // 必须是2的幂
     const bool clip = true;
@@ -115,7 +116,7 @@ void test_softmax_ode(int party) {
         double min_value = -20.0;
         double max_value = 20.0;
         // 创建一些包含极端值的数据
-        //plain_input_double = {-20.0, -3.0, 0.0, 1.0, 2.5, 10.0, 15.0, 0.5};
+        plain_input_double = {-20.0, -3.0, 0.0, 1.0, 2.5, 10.0, 15.0, 0.5};
         //plain_input_double = {-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654,-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654,-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654,-2.0, -10.0, 5.0, 8.0, 12, 16.0, 15.0, 0.5, 2.3, 2.6, -3.3333, 8.56, 12.444, 16.556, 15.4789, 0.55654};
         plain_input_double = generate_random_double_array(size, min_value, max_value);
         //-4 -3 0 1 2.5 10 12 0.5
