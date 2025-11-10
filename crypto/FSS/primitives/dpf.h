@@ -13,3 +13,6 @@ GroupElement evalAll_reduce(int party, DPFKeyPack &key, GroupElement rightShift,
 std::pair<DPFETKeyPack, DPFETKeyPack> keyGenDPFET(int bin, GroupElement idx);
 std::pair<GroupElement, GroupElement> evalAll_reduce_et(int party, DPFETKeyPack &key, GroupElement rightShift, const std::vector<GroupElement> &tab);
 GroupElement evalDPFET_LT(int party, const DPFETKeyPack &key, GroupElement x);
+
+std::pair<DPFETKeyPack, DPFETKeyPack> keyGenDPFGT(int bin, GroupElement idx);
+GroupElement evalDPFGT_GT(int party, const DPFETKeyPack &key, GroupElement x);
