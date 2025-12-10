@@ -43,7 +43,7 @@ add_library(${PROJECT_NAME}
     protocol/float.cpp
     protocol/mic.cpp
     # protocol/msnzb.cpp
-    # protocol/mult.cpp
+    protocol/mult.cpp
     protocol/pubdiv.cpp
     # protocol/pubcmp.cpp
     # protocol/clip.cpp

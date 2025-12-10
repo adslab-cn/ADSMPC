@@ -21,6 +21,7 @@
 // #include "../protocol/fixtobfloat16.h"
 // #include "../protocol/wrap.h"
 #include "../primitives/dpf.h"
+#include "../protocol/mult.h"
 // #include "../protocol/taylor.h"
 #include "../protocol/float.h"
 #include "../protocol/dpfsort.h"
@@ -1850,6 +1851,224 @@ void MaxPoolBackward(int32_t N, int32_t H, int32_t W, int32_t C, int32_t FH,
     }
     std::cerr << ">> MaxPoolBackward - End" << std::endl;
 }
+
+void SlothMax(int size, int bin, GroupElement *x, GroupElement *y, GroupElement *out, std::string prefix)
+{
+    auto t1 = time_this_block([&]()
+                              {
+#pragma omp parallel for
+    for (int i = 0; i < size; ++i)
+    {
+        out[i] = x[i] - y[i];
+    } });
+    FastRelu(size, out, out, out, out, prefix + "Max::");
+    auto t2 = time_this_block([&]()
+                              {
+#pragma omp parallel for
+    for (int i = 0; i < size; ++i)
+    {
+        out[i] = out[i] + y[i];
+    } });
+
+    if (party != DEALER)
+        FSS::push_stats({prefix + "Max::Misc", 0, t1 + t2, 0, 0, 0});
+}
+
+// x is [s1 x s2]
+// y is [s1]
+void SlothMaxpool(int s1, int s2, int bin, GroupElement *x, GroupElement *y, std::string prefix)
+{
+    GroupElement *left = new GroupElement[s1 * s2];  // more elements than required but whatever
+    GroupElement *right = new GroupElement[s1 * s2]; // more elements than required but whatever
+    GroupElement *res = new GroupElement[s1 * s2];
+    GroupElement *tmp = new GroupElement[s1];
+
+    auto t1 = time_this_block([&]()
+                              {
+#pragma omp parallel for
+    for (int i = 0; i < s1 * s2; ++i)
+    {
+        res[i] = x[i];
+    } });
+
+    // do in log rounds
+    int curr = s2;
+    while (curr != 1)
+    {
+        int curr2 = curr / 2;
+
+        auto t2 = time_this_block([&]()
+                                  {
+#pragma omp parallel for
+        for (int i = 0; i < s1; ++i)
+        {
+            for (int j = 0; j < curr2; ++j)
+            {
+                Arr2DIdx(left, s1, curr2, i, j) = Arr2DIdx(res, s1, curr, i, 2 * j);
+                Arr2DIdx(right, s1, curr2, i, j) = Arr2DIdx(res, s1, curr, i, 2 * j + 1);
+            }
+        } });
+
+        SlothMax(s1 * curr2, bin, left, right, left, prefix + "Maxpool::");
+
+        int currNext;
+        auto t3 = time_this_block([&]()
+                                  {
+        if ((curr % 2) == 0)
+        {
+            currNext = curr / 2;
+        }
+        else
+        {
+            currNext = curr / 2 + 1;
+#pragma omp parallel for
+            for (int i = 0; i < s1; ++i)
+            {
+                tmp[i] = Arr2DIdx(res, s1, curr, i, curr - 1);
+            }
+#pragma omp parallel for
+            for (int i = 0; i < s1; ++i)
+            {
+                Arr2DIdx(res, s1, currNext, i, currNext - 1) = tmp[i];
+            }
+        }
+
+#pragma omp parallel for
+        for (int i = 0; i < s1; ++i)
+        {
+            for (int j = 0; j < curr2; ++j)
+            {
+                Arr2DIdx(res, s1, currNext, i, j) = Arr2DIdx(left, s1, curr2, i, j);
+            }
+        }
+        curr = currNext; });
+
+        if (party != DEALER)
+            FSS::push_stats({prefix + "Maxpool::Misc", 0, t2 + t3, 0, 0, 0});
+    }
+
+    auto t4 = time_this_block([&]()
+                              {
+#pragma omp parallel for
+    for (int i = 0; i < s1; ++i)
+    {
+        y[i] = Arr2DIdx(res, s1, 1, i, 0);
+    } });
+
+    if (party != DEALER)
+        FSS::push_stats({prefix + "Maxpool::Misc", 0, t1 + t4, 0, 0, 0});
+
+    delete[] left;
+    delete[] right;
+    delete[] res;
+    delete[] tmp;
+}
+
+void SlothDrelu(int size, int bin, GroupElement *x, GroupElement *y, std::string prefix)
+{
+    if (party == DEALER)
+    {
+        pair<SlothDreluKeyPack> *keys = new pair<SlothDreluKeyPack>[size];
+
+#pragma omp parallel for
+        for (int i = 0; i < size; ++i)
+        {
+            GroupElement rout = random_ge(1);
+            keys[i] = keyGenSlothDrelu(bin, x[i], rout);
+            y[i] = rout;
+        }
+
+        for (int i = 0; i < size; ++i)
+        {
+            server->send_sloth_drelu_key(keys[i].first);
+            client->send_sloth_drelu_key(keys[i].second);
+            freeSlothDreluKeyPackPair(keys[i]);
+        }
+
+        delete[] keys;
+    }
+    else
+    {
+        SlothDreluKeyPack *keys = new SlothDreluKeyPack[size];
+
+        uint64_t keysize_start = dealer->bytesReceived();
+        uint64_t keyread_time = time_this_block([&]()
+                                                {
+            for (int i = 0; i < size; ++i) {
+                keys[i] = dealer->recv_slothdrelu_key(bin);
+            } });
+
+        peer->sync();
+
+        uint64_t compute_time = time_this_block([&]()
+                                                {
+#pragma omp parallel for
+            for (int i = 0; i < size; ++i) {
+                y[i] = evalSlothDrelu(party - 2, x[i], keys[i]);
+            } });
+
+        auto reconstruction_stats = time_comm_this_block([&]()
+                                                         { reconstruct(size, y, 1); });
+
+        FSS::stat_t stat = {
+            prefix + "Drelu",
+            keyread_time,
+            compute_time,
+            reconstruction_stats.first,
+            reconstruction_stats.second,
+            dealer->bytesReceived() - keysize_start};
+
+        stat.print();
+        FSS::push_stats(stat);
+
+        for (int i = 0; i < size; ++i)
+        {
+            freeSlothDreluKeyPack(keys[i]);
+        }
+        delete[] keys;
+    }
+}
+
+// in .../FSS/api/api.cpp
+
+// 这是一个批处理版本的安全平方函数
+void SecureSquare(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr)) {
+    if (party == DEALER) {
+        // Dealer为每个元素生成并分发平方密钥
+        pair<SquareKey> *keys = new pair<SquareKey>[size];
+        
+        // #pragma omp parallel for // 可以并行生成
+        for (int i = 0; i < size; ++i) {
+            keys[i] = keyGenSquare(inArr_mask[i], outArr_mask[i]);
+        }
+
+        for (int i = 0; i < size; ++i) {
+            server->send_square_key(keys[i].first);
+            client->send_square_key(keys[i].second);
+        }
+        delete[] keys;
+    } else {
+        // 计算方接收密钥
+        SquareKey *keys = new SquareKey[size];
+        for (int i = 0; i < size; ++i) {
+            keys[i] = dealer->recv_square_key();
+        }
+
+        peer->sync(); // 确保双方都接收完毕
+
+        // 并行执行本地计算
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            outArr[i] = evalSquare(party - SERVER, inArr[i], keys[i]);
+        }
+        
+        // 通常平方作为中间步骤，不需要立即重构
+        // reconstruct(size, outArr, bitlength); 
+        
+        delete[] keys;
+    }
+}
+
 std::pair<ElemWiseMulKeyPack, ElemWiseMulKeyPack> keyGenElemWiseMul(int32_t size)
 {
     ElemWiseMulKeyPack k0, k1;
@@ -3082,4 +3301,197 @@ void SoftmaxODE(int32_t size,
     delete[] x;
     delete[] g;
     delete[] gx_prod;
+}
+
+// in .../FSS/api/api.cpp
+
+// Include necessary headers, e.g., "api.h", "protocol/nonlinear.h"
+
+// =========================================================================
+// == HELPER FUNCTION: Secure Exponential Approximation
+// =========================================================================
+void SecureExpApprox(int32_t size, 
+                     MASK_PAIR(GroupElement *inArr),
+                     MASK_PAIR(GroupElement *outArr),
+                     int scale, 
+                     int taylor_n)
+{
+    if (party == DEALER) {
+        // Dealer的离线阶段：为所有将要调用的协议按顺序生成密钥
+        GroupElement* dummy1 = new GroupElement[size];
+        GroupElement* dummy2 = new GroupElement[size];
+        
+        // 1. Keys for SlothDrelu (用于裁剪区间的比较)
+        SlothDrelu(size, bitlength, dummy1, dummy2, "ExpApprox::Clip");
+
+        // 2. Keys for Taylor approximation (ARS, n*Square, n*ARS)
+        //    这些密钥只对那些不在裁剪区间的元素有意义，但为了协议的简洁性，
+        //    我们为所有元素都生成密钥。
+        ARS_CrypTen_Style(size, dummy1, dummy2, taylor_n);
+        for (int i = 0; i < taylor_n; ++i) {
+            SecureSquare(size, dummy2, nullptr, dummy1, nullptr);
+            ARS_CrypTen_Style(size, dummy1, dummy1, scale);
+        }
+        
+        // 3. Keys for the final Select
+        Select(size, dummy2, dummy1, dummy1, "ExpApprox::Select");
+
+        delete[] dummy1; 
+        delete[] dummy2;
+        return;
+    }
+
+    // --- Computing Party Logic ---
+
+    // === Part 1: 计算泰勒逼近的结果 [taylor_results] ===
+    // 这一步与简化版完全相同，我们无条件地为所有输入计算泰勒逼近。
+    GroupElement* taylor_results = new GroupElement[size];
+    {
+        GroupElement* term_shares = new GroupElement[size];
+        ARS_CrypTen_Style(size, inArr, term_shares, taylor_n);
+        
+        GroupElement one_fixed = (1LL << scale);
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            if (party == SERVER) {
+                term_shares[i] += one_fixed;
+            }
+        }
+
+        GroupElement* current_res = term_shares;
+        GroupElement* next_res = new GroupElement[size];
+        for (int i = 0; i < taylor_n; ++i) {
+            SecureSquare(size, current_res, nullptr, next_res, nullptr);
+            ARS_CrypTen_Style(size, next_res, next_res, scale);
+            std::swap(current_res, next_res);
+        }
+        memcpy(taylor_results, current_res, size * sizeof(GroupElement));
+        
+        // Cleanup for this block
+        if (current_res != term_shares) delete[] current_res;
+        if (next_res != term_shares) delete[] next_res;
+        else delete[] current_res;
+    }
+
+    // === Part 2: 计算裁剪区间的条件位 [is_lt_Texp] ===
+    const double T_exp_double = -13.0; // 同BumbleBee论文参数
+    GroupElement T_exp_fixed = double_to_fixed(T_exp_double, scale);
+
+    GroupElement* diff_shares = new GroupElement[size];
+    GroupElement* is_ge_shares = new GroupElement[size]; // Share of [x >= T_exp]
+    GroupElement* is_lt_shares = new GroupElement[size]; // Share of [x < T_exp]
+
+    // a. 计算 [diff] = [x] - T_exp_fixed (本地操作)
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        if (party == SERVER) {
+            diff_shares[i] = inArr[i] - T_exp_fixed;
+        } else {
+            diff_shares[i] = inArr[i];
+        }
+    }
+    
+    // b. 安全地计算 [diff >= 0], 结果存入 is_ge_shares
+    SlothDrelu(size, bitlength, diff_shares, is_ge_shares, "ExpApprox::Clip");
+
+    // c. 本地计算 [is_lt_shares] = 1 - [is_ge_shares]
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        if (party == SERVER) {
+            is_lt_shares[i] = 1 - is_ge_shares[i];
+        } else {
+            // 在加法秘密共享中, [1-x] 的份额是 P0持有1-x0, P1持有-x1
+            is_lt_shares[i] = 0 - is_ge_shares[i];
+        }
+        mod(is_lt_shares[i], 1); // 确保结果是0或1
+    }
+
+    // 调用Select协议:
+    // if is_lt_shares is [1] (i.e., x < T_exp), select from zero_shares
+    // if is_lt_shares is [0] (i.e., x >= T_exp), select from taylor_results
+    Select(size, is_lt_shares, taylor_results, outArr, "ExpApprox::Select");
+
+    // --- Cleanup ---
+    delete[] taylor_results;
+    delete[] diff_shares;
+    delete[] is_ge_shares;
+    delete[] is_lt_shares;
+    //delete[] zero_shares;
+}
+
+
+// =========================================================================
+// == MAIN FUNCTION: SoftmaxBumbleBee
+// =========================================================================
+void SoftmaxBumbleBee(int32_t size, 
+                      MASK_PAIR(GroupElement *inArr),
+                      MASK_PAIR(GroupElement *outArr),
+                      int scale, 
+                      int taylor_n)
+{
+    if (party == DEALER) {
+        // Let the helper functions handle Dealer's logic.
+        // It's important to call them in the same order as the computing parties.
+        GroupElement* dummy_vec = new GroupElement[size];
+        GroupElement* dummy_single = new GroupElement[1];
+        
+        // 1. SecureMaxVector
+        SlothMaxpool(1, size, bitlength, dummy_vec, dummy_single, "Softmax::");
+
+        // 2. SecureExpApprox
+        SecureExpApprox(size, dummy_vec, nullptr, dummy_vec, nullptr, scale, taylor_n);
+        
+        // 4. Final ElemWiseMul
+        ElemWiseMul(size, dummy_vec, nullptr, dummy_vec, nullptr, dummy_vec, nullptr);
+
+        delete[] dummy_vec;
+        delete[] dummy_single;
+        return;
+    }
+
+    // === 1. Securely find the maximum value ===
+    GroupElement* max_val_share = new GroupElement[1];
+    // We treat the 1D input vector as a 1xSIZE matrix for SlothMaxPool
+    SlothMaxpool(1, size, bitlength, inArr, max_val_share, "Softmax::");
+    
+    // === 2. Locally compute centered input x' = x - max(x) ===
+    GroupElement* x_prime_shares = new GroupElement[size];
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        x_prime_shares[i] = inArr[i] - max_val_share[0];
+    }
+    
+    // === 3. Securely compute exp(x') for each element ===
+    GroupElement* exp_shares = new GroupElement[size];
+    SecureExpApprox(size, x_prime_shares, nullptr, exp_shares, nullptr, scale, taylor_n);
+    
+    // === 4. Locally sum up all the exp shares ===
+    GroupElement sum_exp_share = 0;
+    for (int i = 0; i < size; ++i) {
+        sum_exp_share += exp_shares[i];
+    }
+    
+    // === 步骤 5: 公开 SUM 并计算倒数 (BumbleBee 的方式) ===
+    GroupElement sum_exp_plain = sum_exp_share;
+    // 调用 reconstruct 来公开 sum 的值
+    reconstruct(1, &sum_exp_plain, bitlength); // 现在 sum_exp_plain 是明文
+    
+    // 在明文中计算倒数
+    double sum_double = fixed_to_double(sum_exp_plain, scale);
+    double inv_sum_double = 1.0 / sum_double;
+    GroupElement inv_sum_fixed = double_to_fixed(inv_sum_double, scale);
+    
+    // === 步骤 6: 公开数与秘密份额的乘法 ===
+    // 这是一个纯本地操作
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        outArr[i] = exp_shares[i] * inv_sum_fixed;
+    }
+
+    ARS_CrypTen_Style(size, outArr, outArr, scale);
+    
+    // === Cleanup ===
+    delete[] max_val_share;
+    delete[] x_prime_shares;
+    delete[] exp_shares;
 }

@@ -148,3 +148,15 @@ void ARS_CrypTen_Style(int32_t size,
 void SlothLRS(int size, GroupElement *x, GroupElement *y, int scale, std::string prefix = "");
 /* Sloth的算数右移 */
 void SlothARS(int size, GroupElement *x, GroupElement *y, int scale, std::string prefix = "");
+
+void SecureExpApprox(int32_t size, 
+                     MASK_PAIR(GroupElement *inArr),
+                     MASK_PAIR(GroupElement *outArr),
+                     int scale, 
+                     int taylor_n);
+
+void SoftmaxBumbleBee(int32_t size, 
+                      MASK_PAIR(GroupElement *inArr),
+                      MASK_PAIR(GroupElement *outArr),
+                      int scale, 
+                      int taylor_n);

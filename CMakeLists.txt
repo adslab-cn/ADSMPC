@@ -141,3 +141,8 @@ add_executable(temp_test
     tests/bench/temp.cpp
 )
 target_link_libraries (temp_test ${PROJECT_NAME})
+
+add_executable(bumblebee_softmax_test
+    tests/bench/bumblebee_softmax_test.cpp
+)
+target_link_libraries (bumblebee_softmax_test ${PROJECT_NAME})
