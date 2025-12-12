@@ -223,7 +223,9 @@ public:
         }
         // graphNode = new LayerGraphNode<T>;
     }
-
+    u64 size() const {
+        return d1 * d2 * d3 * d4;
+    }
     ~Tensor4D() {
         free();
     }

@@ -1,15 +1,15 @@
-#include <backend/FSS_extended.h>
+#include "../../nn/backend/FSS_extended.h"
 // #include <backend/FSS_transformer.h>
-#include <layers/layers.h>
-#include <module.h>
-#include <aux_parameter/utils.h>
-#include <api/api.h>
+#include "../../nn/layers/layers.h"
+#include "../../nn/module.h"
+#include "../../crypto/FSS/aux_parameter/utils.h"
+#include "../../crypto/FSS/api/api.h"
 
 
 
 int main(int __argc, char**__argv){
 
-    sytorch_init();
+    //sytorch_init();
 
     int party = atoi(__argv[1]);
     std::string ip = "127.0.0.1";
@@ -27,10 +27,10 @@ int main(int __argc, char**__argv){
     }
     FSS->init(ip, true);
 
-    u64 n_seq = 10;
+    u64 n_seq = 2048;
 
-    Tensor<u64> input({n_seq, n_seq});
-    Tensor<i64> input_ct(input.shape);
+    Tensor4D<u64> input(1, 1, 1, n_seq); 
+    Tensor4D<i64> input_ct(1, 1, 1, n_seq);
 
     u64 scale = 12;
 
@@ -45,25 +45,29 @@ int main(int __argc, char**__argv){
         }
 
     }
-    Tensor<u64> output(input.shape);
-    Tensor<i64> output_ct(input.shape);
+Tensor4D<u64> output(input.d1, input.d2, input.d3, input.d4);
+Tensor4D<i64> output_ct(input.d1, input.d2, input.d3, input.d4);
     FSS->initializeInferencePartyB(input);
 
+    
+    auto start_time = std::chrono::high_resolution_clock::now();
     FSS::start();
-    for (int i = 0; i < 144; ++i)
-        FSS->softmax(input, output, scale, 0);
+    //for (int i = 0; i < 144; ++i)
+    FSS->softmax(input, output, scale, 0);
     FSS::end();
 
-    ClearText<i64> *ct = new ClearText<i64>();
-    ct->softmax(input_ct, output_ct, scale, 1);
 
-    FSS->outputA(output);
-    if (party == CLIENT) {
-        for (int i = 0; i < input.size(); ++i) {
-            i64 diff = std::abs((i64)output.data[i] - output_ct.data[i]);
-            always_assert(diff == 0);
-        }
-    }
+    auto end_time = std::chrono::high_resolution_clock::now();
+
+    // 4. 计算时间差并打印
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+
+    std::cout << "================================================" << std::endl;
+    std::cout << "Total execution time: " << duration.count() << " milliseconds" << std::endl;
+    std::cout << "Total execution time: " << duration.count() / 1000.0 << " seconds" << std::endl;
+    std::cout << "================================================" << std::endl;
+
     FSS->finalize();
 
     return 0;

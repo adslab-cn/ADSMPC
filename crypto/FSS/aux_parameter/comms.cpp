@@ -2176,6 +2176,31 @@ FastReluKeyPack Dealer::recv_fast_relu_key(int Bin, int Bout)
     return kp;
 }
 
+void Peer::send_fast_relu_dpfet_key(const FastReluDPFETKeyPack &kp)
+{
+    // 1. 复用已有的 dpfet_keypack 发送逻辑
+    send_dpfet_keypack(kp.dpfetKey);
+    
+    // 2. 发送额外的 r_sh (r 的份额)
+    send_ge(kp.r_sh, kp.Bin);
+}
+
+FastReluDPFETKeyPack Dealer::recv_fast_relu_dpfet_key(int Bin, int Bout)
+{
+    FastReluDPFETKeyPack kp;
+    kp.Bin = Bin;
+    kp.Bout = Bout;
+
+    // 1. 复用已有的 dpfet_keypack 接收逻辑
+    //    注意：DPFETKeyPack 通常不包含 Bout 信息，所以我们直接使用 Bin
+    kp.dpfetKey = recv_dpfet_keypack(Bin); 
+
+    // 2. 接收额外的 r_sh
+    kp.r_sh = recv_ge(Bin);
+
+    return kp;
+}
+
 void Peer::send_ars_crypten_key(const ARS_CrypTen_Style_KeyPack &kp) {
     keyBuf->write((char *)&kp.r_share, sizeof(GroupElement));
     keyBuf->write((char *)&kp.theta_r_share, sizeof(GroupElement));

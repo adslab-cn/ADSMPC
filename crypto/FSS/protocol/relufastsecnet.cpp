@@ -1,6 +1,7 @@
 // 在 keys.cpp
 #include "relufastsecnet.h" // 确保包含了头文件
 #include "../primitives/dcf.h"
+#include "../primitives/dpf.h"
 
 std::pair<FastReluKeyPack, FastReluKeyPack> keyGenFastRelu(int Bin, int Bout) {
     // 1. Dealer 选择随机偏移量 r
@@ -94,5 +95,47 @@ std::pair<FastReluKeyPack, FastReluKeyPack> keyGenFastRelu(int Bin, int Bout) {
 
 
 
+    return std::make_pair(k0, k1);
+}
+
+
+std::pair<FastReluDPFETKeyPack, FastReluDPFETKeyPack> keyGenFastRelu_DPFET(int Bin, int Bout) {
+    // 1. Dealer 选择一个随机偏移量 r
+    //    为了避免环绕问题，通常选择一个中间范围的值
+    GroupElement r = FSSConfig::prngs[0].get<GroupElement>() % (1ULL << (Bin - 2));
+    
+    // 2. 定义 payload
+    // 当 y > r 时，系数 (b0, b1) 需要跳变 (1, -r)。
+    // 但是 DPFET 通常只支持单个 payload。我们需要一种方法来编码 (1, -r)。
+    //
+    // 技巧：我们不直接输出系数，而是输出一个“标志位”，然后用这个标志位去选择正确的系数。
+    // 我们让 DPFET 安全地计算 [is_greater_than_r]。
+    // g(y) = 1 if y > r, 0 otherwise.
+    // DPFET_LT 计算的是 y >= alpha，所以 g(y) = 1 - [y-1 >= r] = 1 - [y >= r+1]
+    // 为了简单起见，我们直接调用 keyGenDPFET，它生成一个在 alpha 点为1的函数
+    // 然后在 eval 端通过前缀和计算。
+    //
+    // 这里我们使用 evalDPFET_LT，它计算 y >= alpha。
+    // 我们需要计算 y > r，这等价于 y >= r+1。
+    // 所以，我们的特殊点 alpha 就是 r+1。
+    GroupElement alpha = r + 1;
+    
+    // 生成一个 DPFET 密钥，它代表的函数在 alpha 点输出 1，其他点输出 0。
+    auto dpfet_keys = keyGenDPFET(Bin, alpha);
+
+    // 3. 生成 r 的秘密份额
+    auto r_shares = splitShare(r, Bin);
+
+    // 4. 打包密钥
+    FastReluDPFETKeyPack k0, k1;
+    k0.Bin = k1.Bin = Bin;
+    k0.Bout = k1.Bout = Bout;
+
+    k0.dpfetKey = dpfet_keys.first;
+    k1.dpfetKey = dpfet_keys.second;
+
+    k0.r_sh = r_shares.first;
+    k1.r_sh = r_shares.second;
+    
     return std::make_pair(k0, k1);
 }

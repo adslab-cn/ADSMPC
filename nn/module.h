@@ -129,11 +129,11 @@ public:
                 node->layer->getweights().fill(0);
                 node->layer->getbias().fill(0);
             }
-            else if (node->layer->name == "BatchNorm2dInference") {
-                BatchNorm2dInference<T> *bn = (BatchNorm2dInference<T> *) node->layer;
-                bn->A.fill(0);
-                bn->B.fill(0);
-            }
+            // else if (node->layer->name == "BatchNorm2dInference") {
+            //     BatchNorm2dInference<T> *bn = (BatchNorm2dInference<T> *) node->layer;
+            //     bn->A.fill(0);
+            //     bn->B.fill(0);
+            // }
         });
     }
 
@@ -210,19 +210,19 @@ public:
                 else
                     bias.fill(0);
             }
-            else if (layer->name.find("BatchNorm2dInference") != std::string::npos) {
-                auto bn = (BatchNorm2dInference<T>*) layer;
-                auto channel = bn->A.size;
-                auto gammaPtr = floatWeights + wIdx;
-                auto betaPtr = floatWeights + wIdx + channel;
-                auto meanPtr = floatWeights + wIdx + 2 * channel;
-                auto varPtr = floatWeights + wIdx + 3 * channel;
-                for (int j = 0; j < channel; ++j) {
-                    bn->A(j) = i64((gammaPtr[j] / std::sqrt(varPtr[j])) * (1LL << scale));
-                    bn->B(j) = i64((betaPtr[j] - gammaPtr[j] * meanPtr[j] / std::sqrt(varPtr[j])) * (1LL << (2 * scale)));
-                }
-                wIdx += 4 * channel;
-            }
+            // else if (layer->name.find("BatchNorm2dInference") != std::string::npos) {
+            //     auto bn = (BatchNorm2dInference<T>*) layer;
+            //     auto channel = bn->A.size;
+            //     auto gammaPtr = floatWeights + wIdx;
+            //     auto betaPtr = floatWeights + wIdx + channel;
+            //     auto meanPtr = floatWeights + wIdx + 2 * channel;
+            //     auto varPtr = floatWeights + wIdx + 3 * channel;
+            //     for (int j = 0; j < channel; ++j) {
+            //         bn->A(j) = i64((gammaPtr[j] / std::sqrt(varPtr[j])) * (1LL << scale));
+            //         bn->B(j) = i64((betaPtr[j] - gammaPtr[j] * meanPtr[j] / std::sqrt(varPtr[j])) * (1LL << (2 * scale)));
+            //     }
+            //     wIdx += 4 * channel;
+            // }
         }
 
         always_assert(wIdx == numParameters);
@@ -427,14 +427,14 @@ public:
                     file << "ReLULayer<T>(bw - scale, bw - scale, batchSz * " << h * w * c << ");";
                 }
             }
-            else if (layer->name == "GlobalAvgPool2D") {
-                auto avgPoolLayer = (GlobalAvgPool2D<T> *)(layer);
-                file << "AvgPool2DLayer<T>(bw, bw - scale, scale, batchSz, " << h << ", " << w << ", " << c << ", " << h << ", " << w << ", 1, 1, 0, 0, 0, 0, TruncateType::LocalARS, TruncateType::LocalARS);";
-            }
-            else if (layer->name == "AvgPool2D") {
-                auto avgPoolLayer = (AvgPool2D<T> *)(layer);
-                file << "AvgPool2DLayer<T>(bw, bw - scale, scale, batchSz, " << h << ", " << w << ", " << c << ", " << avgPoolLayer->ks << ", " << avgPoolLayer->ks << ", " << avgPoolLayer->stride << ", " << avgPoolLayer->stride << ", " << avgPoolLayer->padding << ", " << avgPoolLayer->padding << ", " << avgPoolLayer->padding << ", " << avgPoolLayer->padding << ", TruncateType::LocalARS, TruncateType::LocalARS);";
-            }
+            // else if (layer->name == "GlobalAvgPool2D") {
+            //     auto avgPoolLayer = (GlobalAvgPool2D<T> *)(layer);
+            //     file << "AvgPool2DLayer<T>(bw, bw - scale, scale, batchSz, " << h << ", " << w << ", " << c << ", " << h << ", " << w << ", 1, 1, 0, 0, 0, 0, TruncateType::LocalARS, TruncateType::LocalARS);";
+            // }
+            // else if (layer->name == "AvgPool2D") {
+            //     auto avgPoolLayer = (AvgPool2D<T> *)(layer);
+            //     file << "AvgPool2DLayer<T>(bw, bw - scale, scale, batchSz, " << h << ", " << w << ", " << c << ", " << avgPoolLayer->ks << ", " << avgPoolLayer->ks << ", " << avgPoolLayer->stride << ", " << avgPoolLayer->stride << ", " << avgPoolLayer->padding << ", " << avgPoolLayer->padding << ", " << avgPoolLayer->padding << ", " << avgPoolLayer->padding << ", TruncateType::LocalARS, TruncateType::LocalARS);";
+            // }
             else if (layer->name == "Add") {
                 std::string bws = (layer->mode == 0) ? "bw" : "bw - scale";
                 auto parent = n->parents[0];
@@ -443,10 +443,10 @@ public:
                 auto ipSize = layer->inputDerivative.d2 * layer->inputDerivative.d3 * layer->inputDerivative.d4;
                 file << "AddLayer<T>(" << bws << ", batchSz * " << ipSize << ");";
             }
-            else if (layer->name == "BatchNorm2dInference") {
-                auto bnLayer = (BatchNorm2dInference<T> *)(layer);
-                file << "BatchNormLayer<T>(bw, scale, batchSz * " << h * w << ", " << c << ", TruncateType::LocalLRS, " << (layer->doPreSignExtension ? "true" : "false") << ");";
-            }
+            // else if (layer->name == "BatchNorm2dInference") {
+            //     auto bnLayer = (BatchNorm2dInference<T> *)(layer);
+            //     file << "BatchNormLayer<T>(bw, scale, batchSz * " << h * w << ", " << c << ", TruncateType::LocalLRS, " << (layer->doPreSignExtension ? "true" : "false") << ");";
+            // }
             else if (layer->name == "Concat") {
                 file << "ConcatLayer<T>();";
             }
@@ -533,20 +533,21 @@ public:
                     }
                 }
             }
-            else if (layer->name.find("BatchNorm2dInference") != std::string::npos) {
-                auto bn = (BatchNorm2dInference<T>*) layer;
-                auto channel = bn->A.size;
-                evalFile.write((char*)bn->A.data, channel * sizeof(i64));
-                evalFile.write((char*)bn->B.data, channel * sizeof(i64));
-                for (int i = 0; i < channel; ++i) {
-                    dealerFile.write((char*)&zeroStr, sizeof(i64));
-                }
-                for (int i = 0; i < channel; ++i) {
-                    dealerFile.write((char*)&zeroStr, sizeof(i64));
-                }
-            }
+            // else if (layer->name.find("BatchNorm2dInference") != std::string::npos) {
+            //     auto bn = (BatchNorm2dInference<T>*) layer;
+            //     auto channel = bn->A.size;
+            //     evalFile.write((char*)bn->A.data, channel * sizeof(i64));
+            //     evalFile.write((char*)bn->B.data, channel * sizeof(i64));
+            //     for (int i = 0; i < channel; ++i) {
+            //         dealerFile.write((char*)&zeroStr, sizeof(i64));
+            //     }
+            //     for (int i = 0; i < channel; ++i) {
+            //         dealerFile.write((char*)&zeroStr, sizeof(i64));
+            //     }
+            // }
         }
         dealerFile.close();
         evalFile.close();
     }
 };
+

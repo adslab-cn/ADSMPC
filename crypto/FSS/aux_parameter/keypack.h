@@ -540,3 +540,13 @@ struct B2A_Crypten_KeyPack {
     uint8_t r_xor_share;
     GroupElement r_add_share;
 };
+
+struct FastReluDPFETKeyPack {
+    int Bin;
+    int Bout;
+    DPFETKeyPack dpfetKey; // 使用 DPFET 密钥
+    GroupElement r_sh;     // r 的份额
+    // b_sh (系数的修正份额) 在 DPFET 中通常是不需要的，
+    // 因为 DPFET 的 payload 是直接嵌入的。
+};
+

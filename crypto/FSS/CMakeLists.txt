@@ -51,7 +51,7 @@ add_library(${PROJECT_NAME}
     protocol/relu.cpp
     protocol/lut.cpp
     # src/protocol/reluextend.cpp
-    # protocol/signextend.cpp
+    protocol/signextend.cpp
     protocol/select.cpp
     # protocol/fixtobfloat16.cpp
     # protocol/wrap.cpp

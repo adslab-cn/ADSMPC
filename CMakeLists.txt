@@ -99,12 +99,12 @@ target_link_libraries(dpf ${PROJECT_NAME})
 
 # target_link_libraries(relu ${PROJECT_NAME})
 
-# add_executable(
-#     softmax
-#     tests/bench/softmax.cpp
-# )
+#add_executable(
+#    softmax
+#    tests/bench/softmax.cpp
+#)
 
-# target_link_libraries(softmax ${PROJECT_NAME})
+#target_link_libraries(softmax ${PROJECT_NAME})
 
 
 add_executable(test_route

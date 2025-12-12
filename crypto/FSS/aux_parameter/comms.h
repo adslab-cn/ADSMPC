@@ -328,6 +328,8 @@ public:
     
     void send_fast_relu_key(const FastReluKeyPack &kp);
 
+    void send_fast_relu_dpfet_key(const FastReluDPFETKeyPack &kp);
+
     void send_ars_crypten_key(const ARS_CrypTen_Style_KeyPack &kp);
 
     void send_b2a_crypten_keys(const B2A_Crypten_KeyPack* keys, int32_t size);
@@ -480,6 +482,8 @@ public:
     void recv_dpf_keypack_t(DPFKeyPack& kp, int bin, int bout);
 
     FastReluKeyPack recv_fast_relu_key(int Bin, int Bout);
+
+    FastReluDPFETKeyPack recv_fast_relu_dpfet_key(int Bin, int Bout);
 
     ARS_CrypTen_Style_KeyPack recv_ars_crypten_key();
 

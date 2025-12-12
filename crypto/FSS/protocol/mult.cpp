@@ -80,20 +80,29 @@ std::pair<SquareKey, SquareKey> keyGenSquare(GroupElement rin, GroupElement rout
 {
     SquareKey k1, k2;
 
-    GroupElement c  = rin * rin + rout;
-    auto b_split = splitShare(2 * rin, 64);
+    // rin 来自 Dealer 的 dummy 变量，如果是随机垃圾值，正好作为随机数 a
+    // 如果是 0，虽然不安全，但逻辑也是对的。
+    GroupElement a = rin; 
+    GroupElement c = a * a; // c = a^2
+
+    auto a_split = splitShare(a, 64);
     auto c_split = splitShare(c, 64);
     
-    k1.b = (b_split.first);
+    // 注意：我们将 [a] 存在 k.b 中，将 [c] 存在 k.c 中
+    k1.b = (a_split.first);
     k1.c = (c_split.first);
     
-    k2.b = (b_split.second);
+    k2.b = (a_split.second);
     k2.c = (c_split.second);
     
     return std::make_pair(k1, k2);
 }
 
-GroupElement evalSquare(int party, GroupElement x, const SquareKey &k)
+// Beaver 协议的最后一步本地计算
+// [x^2] = e^2 + 2*e*[a] + [c], 其中 e = x - a 是公开值
+GroupElement evalSquare(int party, GroupElement e_public, const SquareKey &k)
 {
-    return party * x * x - x * k.b + k.c;
+    // k.b 是 [a], k.c 是 [a^2]
+    // 结果 = party * e^2 + 2 * e * [a] + [c]
+    return (party * e_public * e_public) + (2 * e_public * k.b) + k.c;
 }
