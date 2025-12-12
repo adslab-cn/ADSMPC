@@ -3785,12 +3785,6 @@ void SecureExpApprox(int32_t size,
             //SlothARS(size, dummy1, dummy1, scale, "ExpApprox::Taylor");
         }
 
-        // // 2. Clip Keys (SlothDrelu)
-        // SlothDrelu(size, bitlength, dummy1, dummy2, "ExpApprox::Clip");
-        // //FastRelu2RoundDrelu(size, bitlength, dummy1, dummy2, "ExpApprox::Clip");
-        
-        // // 3. Select Keys
-        // Select(size, dummy2, dummy1, dummy1, "ExpApprox::Select");
 
         delete[] dummy1; 
         delete[] dummy2;
@@ -3830,40 +3824,7 @@ void SecureExpApprox(int32_t size,
         if (next_res != term_shares) delete[] next_res;
         else delete[] current_res;
     }
-
-    // [DEBUG] Taylor 结果 (这里有些负数/下溢是正常的，关键看后面选不选它)
-    //debug_reconstruct_and_print("SecureExpApprox: Taylor Raw Result", size, taylor_results, scale);
     memcpy(outArr,taylor_results, size * sizeof(GroupElement));
-    // === Part 2: Clip Condition (SlothDrelu) ===
-    // const double T_exp_double = -13.0; // 阈值
-    // GroupElement T_exp_fixed = double_to_fixed(T_exp_double, scale);
-
-    // GroupElement* diff_shares = new GroupElement[size];
-    // GroupElement* is_ge_shares = new GroupElement[size]; // [x >= -13]
-
-    // #pragma omp parallel for
-    // for (int i = 0; i < size; ++i) {
-    //     if (party == SERVER) diff_shares[i] = inArr[i] - T_exp_fixed;
-    //     else diff_shares[i] = inArr[i];
-    // }
-    // debug_reconstruct_and_print("SecureExpApprox:  inArr[i] - T_exp_fixed", size, diff_shares, scale);
-    // // 计算 [diff >= 0] 即 [x >= -13]
-    // SlothDrelu(size, bitlength, diff_shares, is_ge_shares, "ExpApprox::Clip");
-    // //FastRelu2RoundDrelu(size, bitlength, diff_shares, is_ge_shares, "ExpApprox::Clip");
-    // // [DEBUG] 打印 "是否 >= -13" (1=保留, 0=置零)
-    // debug_reconstruct_and_print("SecureExpApprox: Is GreaterOrEqual -13? (1=Keep, 0=Zero)", size, is_ge_shares, 0);
-
-    // // === Part 3: Selection ===
-    // // 【核心修复】直接使用 is_ge_shares 作为选择位
-    // // 如果 is_ge 为 1，结果 = 1 * taylor = taylor
-    // // 如果 is_ge 为 0，结果 = 0 * taylor = 0
-    // Select(size, is_ge_shares, taylor_results, outArr, "ExpApprox::Select");
-
-    // debug_reconstruct_and_print("SecureExpApprox: Final Output", size, outArr, scale);
-
-    // delete[] taylor_results;
-    // delete[] diff_shares;
-    // delete[] is_ge_shares;
 }
 
 // ================= SoftmaxBumbleBee (带调试功能的完整版) =================
