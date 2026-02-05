@@ -27,7 +27,7 @@ build_cmake () {
   echo "Building and installing cmake from source"
   wget https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3.tar.gz
   tar -zxvf cmake-4.2.3.tar.gz
-  cd cmake-3.2.3
+  cd cmake-4.2.3
   sudo ./bootstrap
   sudo make
   sudo make install
