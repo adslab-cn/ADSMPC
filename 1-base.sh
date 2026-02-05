@@ -25,14 +25,14 @@ sudo update-alternatives --config gcc
 
 build_cmake () {
   echo "Building and installing cmake from source"
-  wget https://github.com/Kitware/CMake/releases/download/v3.13.4/cmake-3.13.4.tar.gz
-  tar -zxvf cmake-3.13.4.tar.gz
-  cd cmake-3.13.4
+  wget https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3.tar.gz
+  tar -zxvf cmake-4.2.3.tar.gz
+  cd cmake-3.2.3
   sudo ./bootstrap
   sudo make
   sudo make install
   cd ..
-  rm -rf cmake-3.13.4 cmake-3.13.4.tar.gz
+  rm -rf cmake-4.2.3 cmake-4.2.3.tar.gz
 }
 
 if which cmake >/dev/null; then
