@@ -35,80 +35,27 @@ void print_double_array(const std::string& title, const std::vector<double>& arr
     }
 }
 
-// =========================================================================
-// == 明文参考实现: BUMBLEBEE SOFTMAX
-// =========================================================================
-void plaintext_softmax_bumblebee(
-    const std::vector<double>& input, 
-    std::vector<double>& output,
-    int taylor_n)
-{
-    if (input.empty()) return;
 
-    // 1. 找到最大值
-    double max_val = *std::max_element(input.begin(), input.end());
-
-    // 2. 中心化并计算指数
-    std::vector<double> exp_values(input.size());
-    double sum_exp = 0.0;
-    
-    for (size_t i = 0; i < input.size(); ++i) {
-        double x_prime = input[i] - max_val;
-        
-        // 3. 使用 (1 + x'/2^n)^(2^n) 逼近 exp(x')
-        // 注意：这里没有T_exp裁剪，与我们简化的MPC协议保持一致
-        double term = x_prime / (1 << taylor_n);
-        double base = 1.0 + term;
-        // 重复平方n次
-        double taylor_res = base;
-        for(int j = 0; j < taylor_n; ++j) {
-            taylor_res *= taylor_res;
-        }
-        
-        exp_values[i] = taylor_res;
-        if(input[i]<-13){
-            exp_values[i]=0.0;
-        }
-        sum_exp += exp_values[i];
-    }
-    
-    // 4. 除以总和
-    if (sum_exp == 0.0) sum_exp = 1e-9; // 避免除以零
-    output.resize(input.size());
-    for (size_t i = 0; i < input.size(); ++i) {
-        output[i] = exp_values[i] / sum_exp;
-    }
-}
 // =========================================================================
 // == 明文参考实现: 标准精确 SOFTMAX (Ground Truth)
 // =========================================================================
-void plaintext_softmax_precise(const std::vector<double>& input, std::vector<double>& output) {
+void plaintext_relu_precise(const std::vector<double>& input, std::vector<double>& output) {
     if (input.empty()) return;
-
-    // 1. 找到最大值 (为了数值稳定性，防止 exp 溢出)
-    double max_val = *std::max_element(input.begin(), input.end());
-
-    // 2. 计算标准 exp
-    std::vector<double> exp_values(input.size());
-    double sum_exp = 0.0;
-    
-    for (size_t i = 0; i < input.size(); ++i) {
-        // 使用标准库的 std::exp
-        exp_values[i] = std::exp(input[i] - max_val);
-        sum_exp += exp_values[i];
-    }
-    
-    // 3. 归一化
-    if (sum_exp == 0.0) sum_exp = 1e-9;
     output.resize(input.size());
-    for (size_t i = 0; i < input.size(); ++i) {
-        output[i] = exp_values[i] / sum_exp;
-    }
+    std::transform(input.begin(), input.end(), output.begin(),
+                   [](double v) { return std::max(0.0, v); });
+    //output = input;
 }
+// void plaintext_relu_precise(const std::vector<double>& input, std::vector<double>& output) {
+//     if (input.empty()) return;
+//     output.resize(input.size());
+//     std::transform(input.begin(), input.end(), output.begin(),
+//     { return std::max(0.0, v); });
+// }
 // --- 主测试函数 ---
 
-void test_softmax_bumblebee(int party) {
-    std::cout << "\n\n>> BumbleBee Softmax Protocol Test - Start" << std::endl;
+void test_relu_crypten(int party) {
+    std::cout << "\n\n>> crypten relu Protocol Test - Start" << std::endl;
 
     // --- 1. 初始化MPC环境 ---
     using FSSVersion = FSSExtended<u64>;
@@ -120,15 +67,13 @@ void test_softmax_bumblebee(int party) {
     FSS->init(ip, true);
 
     // --- 2. 准备数据 ---
-    const int size = 2048;       // 建议先用小一点的 size (如 128) 方便看日志，没问题了再开 2048
+    const int size = 8;  
     const int scale = 16;       
-    const int taylor_n = 6;     
     
     std::vector<double> plain_input_double;
     std::vector<GroupElement> plain_input_fixed(size);
 
     if (party == SERVER) {
-        // 生成随机输入 (-8 到 8 是 BumbleBee 优化较好的区间，超过这个区间误差会增大)
         plain_input_double = generate_random_double_array(size, -8.0, 8.0);
         for (int i = 0; i < size; ++i) {
             plain_input_fixed[i] = double_to_fixed(plain_input_double[i], scale);
@@ -137,14 +82,11 @@ void test_softmax_bumblebee(int party) {
 
     // --- 3. 计算期望结果 (Server) ---
     std::vector<double> output_precise(size);
-    std::vector<double> output_bumblebee_logic(size);
+    std::vector<double> output_logic(size);
 
     if (party == SERVER) {
         // A. 计算标准精确值
-        plaintext_softmax_precise(plain_input_double, output_precise);
-        
-        // B. 计算 BumbleBee 逻辑模拟值
-        plaintext_softmax_bumblebee(plain_input_double, output_bumblebee_logic, taylor_n);
+        plaintext_relu_precise(plain_input_double, output_precise);
 
         // 打印输入
         print_double_array("Input Data", plain_input_double, 5);
@@ -165,8 +107,9 @@ void test_softmax_bumblebee(int party) {
     FSS::start();
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    SecureReLU(size, input_shares, output_shares, scale);
     // 你的核心调用
-    SoftmaxBumbleBee(size, input_shares, in_mask, output_shares, out_mask, scale, taylor_n);
+    // SoftmaxBumbleBee(size, input_shares, in_mask, output_shares, out_mask, scale);
     
     auto end_time = std::chrono::high_resolution_clock::now();
     FSS::end();
@@ -201,8 +144,8 @@ void test_softmax_bumblebee(int party) {
         double max_total_error = 0.0;
 
         for (int i = 0; i < size; ++i) {
-            double alg_err = std::abs(output_precise[i] - output_bumblebee_logic[i]);
-            double mpc_err = std::abs(output_bumblebee_logic[i] - output_mpc[i]);
+            double alg_err = std::abs(output_precise[i] - output_logic[i]);
+            double mpc_err = std::abs(output_logic[i] - output_mpc[i]);
             double total_err = std::abs(output_precise[i] - output_mpc[i]);
 
             max_alg_error = std::max(max_alg_error, alg_err);
@@ -212,7 +155,7 @@ void test_softmax_bumblebee(int party) {
             if (i < 10) { // 只打印前10行详细数据
                 std::cout << std::setw(6) << i 
                           << std::setw(15) << output_precise[i] 
-                          << std::setw(15) << output_bumblebee_logic[i] 
+                          << std::setw(15) << output_logic[i] 
                           << std::setw(15) << output_mpc[i] 
                           << std::setw(15) << alg_err 
                           << std::setw(15) << mpc_err 
@@ -252,7 +195,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    test_softmax_bumblebee(party);
+    test_relu_crypten(party);
 
     return 0;
 }

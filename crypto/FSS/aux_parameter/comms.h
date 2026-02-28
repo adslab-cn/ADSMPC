@@ -333,6 +333,12 @@ public:
     void send_ars_crypten_key(const ARS_CrypTen_Style_KeyPack &kp);
 
     void send_b2a_crypten_keys(const B2A_Crypten_KeyPack* keys, int32_t size);
+    
+    void send_secureand_key(const SecureANDKeyPack* keys,int32_t size);
+    
+    void send_uint64_array(const GroupElement *data, int size);
+    
+    void recv_uint64_array(GroupElement *data, int size);
 };
 
 Peer* waitForPeer(int port); // 服务器等待客户端连接
@@ -488,4 +494,6 @@ public:
     ARS_CrypTen_Style_KeyPack recv_ars_crypten_key();
 
     void recv_b2a_crypten_keys(B2A_Crypten_KeyPack* keys, int32_t size);
+    
+    void recv_secureand_key(SecureANDKeyPack* keys, int32_t size);
 };

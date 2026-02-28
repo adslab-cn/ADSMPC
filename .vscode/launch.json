@@ -5,12 +5,13 @@
             "name": "Party 1 (Dealer)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/bumblebee_softmax_test",
+            "program": "${workspaceFolder}/build/common_test",
             "args": ["1"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],
-            "externalConsole": true,
+            "externalConsole": false,
+            "console": "integratedTerminal",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -29,12 +30,13 @@
             "name": "Party 2 (Server)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/bumblebee_softmax_test",
+            "program": "${workspaceFolder}/build/common_test",
             "args": ["2"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],
-            "externalConsole": true,
+            "externalConsole": false,
+            "console": "integratedTerminal",
             "MIMode": "gdb",
             "setupCommands": [
                 {
@@ -53,12 +55,13 @@
             "name": "Party 3 (Client)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/bumblebee_softmax_test",
+            "program": "${workspaceFolder}/build/common_test",
             "args": ["3"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build",
             "environment": [],
-            "externalConsole": true,
+            "externalConsole": false,
+            "console": "integratedTerminal",
             "MIMode": "gdb",
             "setupCommands": [
                 {

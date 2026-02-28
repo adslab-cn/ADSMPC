@@ -93,7 +93,7 @@ void SlothRelu(int size, int bin, GroupElement *x, GroupElement *y, std::string 
 void Softmax(int32_t s1, int32_t s2, int bin, GroupElement *x, GroupElement *y, int32_t scale);
 
 void SlothMax(int size, int bin, GroupElement *x, GroupElement *y, GroupElement *out, std::string prefix);
-void ElemWiseMul(int32_t size, MASK_PAIR(GroupElement *A), MASK_PAIR(GroupElement *B), MASK_PAIR(GroupElement *C));
+void ElemWiseMul(int32_t size, MASK_PAIR(const GroupElement *A), MASK_PAIR(const GroupElement *B), MASK_PAIR(GroupElement *C));
 void DpfRoute(
     int32_t size,
     MASK_PAIR(GroupElement *y_in),
@@ -160,3 +160,12 @@ void SoftmaxBumbleBee(int32_t size,
                       MASK_PAIR(GroupElement *outArr),
                       int scale, 
                       int taylor_n);
+void SecureAND(int32_t size, const GroupElement* A_shares, const GroupElement* B_shares, GroupElement* C_shares);
+
+void SecureAdd(int32_t size, const GroupElement* A_shares, const GroupElement* B_shares, GroupElement* Sum_shares);
+
+void SecretShare_Bool(int32_t size, const GroupElement* plain_in, GroupElement* share_out, int owner);
+
+void A2B(int size, const GroupElement* arithmetic_shares, GroupElement* binary_shares);
+
+void SecureReLU(int32_t size, const GroupElement* inArr, GroupElement* outArr,int scale);

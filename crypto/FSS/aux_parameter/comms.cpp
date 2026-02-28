@@ -897,6 +897,22 @@ void Peer::recv_uint8_array(uint8_t *data, int size)
     // bytesReceived += size;
 }
 
+
+void Peer::send_uint64_array(const GroupElement *data, int size)
+{
+    this->keyBuf->write((char *)data, size);
+    // always_assert(size == send(sendsocket, data, size, 0));
+    // bytesSent += size;
+}
+
+void Peer::recv_uint64_array(GroupElement *data, int size)
+{
+    this->keyBuf->read((char *)data, size);
+    // always_assert(size == recv(recvsocket, data, size, MSG_WAITALL));
+    // bytesReceived += size;
+}
+
+
 Dealer::Dealer(std::string ip, int port)
 {
     this->keyBuf = new SocketBuf(ip, port, true);
@@ -2222,4 +2238,14 @@ void Peer::send_b2a_crypten_keys(const B2A_Crypten_KeyPack* keys, int32_t size) 
 void Dealer::recv_b2a_crypten_keys(B2A_Crypten_KeyPack* keys, int32_t size) {
     // 接收字节流并填充到结构体数组中
     keyBuf->read((char*)keys, size * sizeof(B2A_Crypten_KeyPack));
+}
+
+
+void Peer::send_secureand_key(const SecureANDKeyPack* keys,int32_t size){
+    keyBuf->write((char*)keys, size*sizeof(SecureANDKeyPack));
+}
+
+void Dealer::recv_secureand_key(SecureANDKeyPack* keys, int32_t size){
+    SecureANDKeyPack key;
+    keyBuf->read((char*)keys, size*sizeof(SecureANDKeyPack));
 }

@@ -550,3 +550,10 @@ struct FastReluDPFETKeyPack {
     // 因为 DPFET 的 payload 是直接嵌入的。
 };
 
+struct SecureANDKeyPack {
+    int32_t size;
+    // 注意：这里用 uint8_t 足够了，但为了和框架统一，也可以用 GroupElement
+    GroupElement* a_share; 
+    GroupElement* b_share;
+    GroupElement* c_share;
+};

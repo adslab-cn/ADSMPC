@@ -1,3 +1,5 @@
+#include <bitset>
+#include <iomanip>
 #include "../aux_parameter/comms.h"
 #include "../aux_parameter/utils.h"
 #include "../aux_parameter/array.h"
@@ -1351,7 +1353,47 @@ void ScaleDown(int32_t size, MASK_PAIR(GroupElement *inArr), int32_t sf)
     }
     std::cerr << ">> ScaleDown - End " << std::endl;
 }
+void debug_reconstruct_and_print(const std::string& tag, int32_t size, const GroupElement* shares, int scale) {
+    if (party == DEALER) return; // Dealer does not participate in reconstruction
 
+    // 1. Copy shares to prevent reconstruct from modifying the original data during calculation
+    GroupElement* temp = new GroupElement[size];
+    memcpy(temp, shares, size * sizeof(GroupElement));
+
+    // 2. Sync and Reconstruct
+    peer->sync();
+    reconstruct(size, temp, FSSConfig::bitlength);
+
+    // 3. Print (Only SERVER prints to avoid duplicate logs)
+    if (party == SERVER) {
+        std::cout << "\n========================================================" << std::endl;
+        std::cout << "[DEBUG] >>> " << tag << " <<<" << std::endl;
+        std::cout << "========================================================" << std::endl;
+        
+        // Limit output to first 10 elements to prevent console flooding
+        int limit = (size > 10) ? 10 : size; 
+        
+        for (int i = 0; i < limit; ++i) {
+            double val = fixed_to_double(temp[i], scale);
+            uint64_t raw_unsigned = (uint64_t)temp[i]; // Treat as unsigned for Hex/Bin
+            int64_t raw_signed = (int64_t)temp[i];     // Treat as signed for Decimal interpretation
+
+            std::cout << "  Element [" << i << "]: " << val << "\n"
+                      << "    Dec (s): " << raw_signed << "\n"
+                      << "    Hex    : 0x" << std::hex << std::setw(16) << std::setfill('0') << raw_unsigned << std::dec << "\n"
+                      << "    Bin    : " << std::bitset<64>(raw_unsigned) << "\n"
+                      << "--------------------------------------------------------" << std::endl;
+        }
+        
+        if (size > limit) {
+            std::cout << "  ... (total " << size << " items, showing first " << limit << ")" << std::endl;
+        }
+        std::cout << std::endl;
+    }
+    
+    delete[] temp;
+    peer->sync(); // Sync again to ensure logs are flushed before proceeding
+}
 
 void Relu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), GroupElement *drelu, std::string prefix)
 {
@@ -2159,9 +2201,150 @@ void evalElemWiseMul(int party, int32_t size,
     delete[] e_reconstruct_buffer;
 }
 
+/**
+ * @brief 使用 Crypten 风格的 "Mask-Reconstruct-Compute" 协议将布尔份额转换为算术份额。
+ * 
+ * @param size 批量转换的大小。
+ * @param x_shares 输入的布尔(XOR)份额数组。
+ * @param y_shares 输出的算术(加性)份额数组。
+ */
+void B2A_Crypten(int32_t size, const uint8_t* x_shares, GroupElement* y_shares)
+{
+    if (party == DEALER) {
+        // Dealer 调用对应的密钥生成函数
+        B2A_Crypten_KeyPack* server_keys = new B2A_Crypten_KeyPack[size];
+        B2A_Crypten_KeyPack* client_keys = new B2A_Crypten_KeyPack[size];
+
+
+        for (int i = 0; i < size; ++i) {
+            // 1. Dealer 生成一个随机比特 r
+            uint8_t r_plain = prngs[0].get<uint8_t>() & 1;
+
+            // 2. 创建 r 的 XOR 份额
+            auto r_xor_split = splitShareXor(r_plain,1); 
+            
+            // 3. 创建 r 的加性份额 (值为 0 或 1)
+            auto r_add_split = splitShare((GroupElement)r_plain, FSSConfig::bitlength);
+
+            // 4. 填充密钥包
+            server_keys[i].r_xor_share = static_cast<uint8_t>(r_xor_split.first);
+            server_keys[i].r_add_share = r_add_split.first;
+
+            client_keys[i].r_xor_share = static_cast<uint8_t>(r_xor_split.second);
+            client_keys[i].r_add_share = r_add_split.second;
+        }
+
+        // 5. 发送密钥包
+        server->send_b2a_crypten_keys(server_keys, size);
+        client->send_b2a_crypten_keys(client_keys, size);
+
+        delete[] server_keys;
+        delete[] client_keys;
+        return;
+    }
+
+    // --- 1. 接收来自 Dealer 的随机数份额 ---
+    std::vector<B2A_Crypten_KeyPack> keys(size);
+    dealer->recv_b2a_crypten_keys(keys.data(), size);
+    peer->sync(); // 确保双方都接收完毕
+
+    // --- 2. 本地计算被屏蔽后的值 d 的 XOR 份额 ---
+    std::vector<uint8_t> d_shares(size);
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        d_shares[i] = x_shares[i] ^ keys[i].r_xor_share;
+    }
+
+    // --- 3. 交互一次，重构以公开 d ---
+    // reconstruct 函数会交换份额并相加/异或。我们需要一个XOR版本的reconstruct。
+    // 如果你的 reconstruct 是加性的，我们需要修改。假设 reconstruct_bool 存在。
+    // 为了简单，我们手动实现。
+    std::vector<uint8_t> d_other_shares(size);
+    if (party == SERVER) {
+        peer->send_uint8_array(d_shares.data(), size);
+        peer->recv_uint8_array(d_other_shares.data(), size);
+    } else { // CLIENT
+        peer->recv_uint8_array(d_other_shares.data(), size);
+        peer->send_uint8_array(d_shares.data(), size);
+    }
+    
+    uint8_t* d_public = new uint8_t[size];
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        d_public[i] = d_shares[i] ^ d_other_shares[i];
+    }
+    
+    // --- 4. 本地计算最终的加性份额 ---
+    // [y] = d + [r] - 2*d*[r]
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        GroupElement d_val = d_public[i];
+        GroupElement r_add_share = keys[i].r_add_share;
+        
+        // 实现 [d] 的份额: 一方持有d，另一方持有0
+        GroupElement d_add_share = (party == CLIENT) ? d_val : 0;
+        
+        // 计算 -2*d*[r] 的份额 (本地操作)
+        GroupElement term3_share = -2 * d_val * r_add_share;
+
+        y_shares[i] = d_add_share + r_add_share + term3_share;
+    }
+}
+
+void reconstruct_bool(int32_t size, uint8_t* arr)
+{
+    if (party == DEALER) return;
+
+    uint8_t* other_shares = new uint8_t[size];
+    if (party == SERVER) {
+        peer->send_uint8_array(arr, size);
+        peer->recv_uint8_array(other_shares, size);
+    } else { // CLIENT
+        peer->recv_uint8_array(other_shares, size);
+        peer->send_uint8_array(arr, size);
+    }
+
+    // 将份额异或起来得到明文
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        arr[i] = arr[i] ^ other_shares[i];
+    }
+    
+    delete[] other_shares;
+    
+    // 增加轮次计数，因为发生了一次交互
+    numRounds += 1; 
+}
+
+void reconstruct_big_bool(int32_t size, GroupElement* arr)
+{
+    if (party == DEALER) return;
+
+    GroupElement* other_shares = new GroupElement[size];
+    if (party == SERVER) {
+        peer->send_uint64_array(arr, size);
+        peer->recv_uint64_array(other_shares, size);
+    } else { // CLIENT
+        peer->recv_uint64_array(other_shares, size);
+        peer->send_uint64_array(arr, size);
+    }
+
+    // 将份额异或起来得到明文
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        arr[i] = arr[i] ^ other_shares[i];
+    }
+    
+    delete[] other_shares;
+    
+    // 增加轮次计数，因为发生了一次交互
+    numRounds += 1; 
+}
+
+
 void ElemWiseMul(int32_t size, 
-                 MASK_PAIR(GroupElement *A),
-                 MASK_PAIR(GroupElement *B),
+                 MASK_PAIR(const GroupElement *A),
+                 MASK_PAIR(const GroupElement *B),
                  MASK_PAIR(GroupElement *C))
 {
     const int scale = 16; // 假设的定点数小数位数
@@ -2179,7 +2362,7 @@ void ElemWiseMul(int32_t size,
         //ARS_CrypTen_Style(size, x1, x1, scale);
             ARS_CrypTen_Style(size, x1, x1, scale);
         // Dealer 端的掩码逻辑保持不变
-        for (int i=0; i<size; ++i) C_mask[i] = 0;
+        // for (int i=0; i<size; ++i) C_mask[i] = 0;
 
         // 释放 Beaver Triple 密钥内存
         delete[] keys.first.a; delete[] keys.first.b; delete[] keys.first.c;
@@ -2189,12 +2372,13 @@ void ElemWiseMul(int32_t size,
 
         // 1. 接收 Beaver Triple 密钥
         auto key = dealer->recv_elemwisemul_key(size);
-        
+        //debug_reconstruct_and_print("ElemWiseMul: A", size, A, scale);
+        //debug_reconstruct_and_print("ElemWiseMul: B", size, B, scale);
         // 2. 执行整数乘法协议
         // 注意：我们把结果存储在一个临时数组中，因为它的小数位数是 2*scale
         GroupElement* z_full_precision = new GroupElement[size];
         evalElemWiseMul(party, size, A, B, z_full_precision, key);
-        
+        //debug_reconstruct_and_print("ElemWiseMul: z_full_precision", size, z_full_precision, 2*scale);
         // 3. 执行截断 (算术右移)
         // ARS 会接收 z_full_precision 的份额，计算截断后的份额，并存入 C
         //ARS(size, z_full_precision, nullptr, C, nullptr, scale);
@@ -2202,6 +2386,7 @@ void ElemWiseMul(int32_t size,
         uint64_t scale_down_time = time_this_block([&]() {
              ARS_CrypTen_Style(size, z_full_precision, C, scale);
         });
+        debug_reconstruct_and_print("ElemWiseMul: C", size, C, scale);
         FSS::push_stats({"ARS", 0, scale_down_time, 0, 0, 0});
         // 4. 清理内存
         delete[] key.a; delete[] key.b; delete[] key.c;
@@ -2241,6 +2426,425 @@ void SecretShare(int32_t size, const GroupElement *plain_in, GroupElement *share
         }
     }
 }
+
+std::pair<SecureANDKeyPack, SecureANDKeyPack> keyGenSecureAND(int32_t size) {
+    SecureANDKeyPack k0, k1;
+    k0.size = k1.size = size;
+    k0.a_share = new GroupElement[size];
+    k1.a_share = new GroupElement[size];
+    k0.b_share = new GroupElement[size];
+    k1.b_share = new GroupElement[size];
+    k0.c_share = new GroupElement[size];
+    k1.c_share = new GroupElement[size];
+
+    // prngs[0] 是 Dealer 的随机数生成器
+    for (int i = 0; i < size; ++i) {
+        // 1. 生成随机布尔比特 a 和 b
+        uint8_t a = prngs[0].get<uint8_t>() & 1;
+        uint8_t b = prngs[0].get<uint8_t>() & 1;
+        // 2. 计算 c = a AND b
+        uint8_t c = a & b;
+
+        // 3. 将 a, b, c 拆分成异或份额
+        auto a_split = splitShareXor(a, 1); // 假设 splitShareXor 返回 std::pair<uint64_t, uint64_t>
+        k0.a_share[i] = (uint8_t)a_split.first;
+        k1.a_share[i] = (uint8_t)a_split.second;
+        
+        auto b_split = splitShareXor(b, 1);
+        k0.b_share[i] = (uint8_t)b_split.first;
+        k1.b_share[i] = (uint8_t)b_split.second;
+
+        auto c_split = splitShareXor(c, 1);
+        k0.c_share[i] = (uint8_t)c_split.first;
+        k1.c_share[i] = (uint8_t)c_split.second;
+    }
+    
+    return std::make_pair(k0, k1);
+}
+
+/**
+ * @brief 对两个布尔秘密共享数组执行安全 AND 操作。
+ * 
+ * @param size      数组大小
+ * @param A_shares  输入 A 的布尔份额 (0 或 1)
+ * @param B_shares  输入 B 的布尔份额 (0 或 1)
+ * @param C_shares  输出 C = A & B 的布尔份额
+ */
+void SecureAND(int32_t size, 
+               const GroupElement* A_shares, 
+               const GroupElement* B_shares, 
+               GroupElement* C_shares)
+{
+    // === Dealer 离线阶段 ===
+    if (party == DEALER) {
+        auto keys = keyGenSecureAND(size);
+        server->send_secureand_key(&keys.first,1); // 需要在 comms.h/.cpp 中添加这个函数
+        client->send_secureand_key(&keys.second,1);
+        
+        // 释放内存
+        delete[] keys.first.a_share; 
+        delete[] keys.second.a_share; 
+        return;
+    }
+
+    // === 计算方在线阶段 ===
+    
+    // 1. 从 Dealer 接收密钥包
+    SecureANDKeyPack keys[1];
+    dealer->recv_secureand_key(keys,1); // 需要在 comms.h/.cpp 添加
+    peer->sync(); // 确保双方都收到了密钥
+
+    // 2. 本地计算掩码 epsilon = A ^ a, delta = B ^ b
+    GroupElement* epsilon_shares = new GroupElement[size];
+    GroupElement* delta_shares = new GroupElement[size];
+
+    //#pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        // A_shares 是 GroupElement (uint64_t), 但我们只关心最低位
+        std::cout<<party<<": "<<i<<std::endl;
+        GroupElement temp;
+        temp = A_shares[i];
+        temp = keys[0].a_share[i];
+        epsilon_shares[i] = temp;
+        epsilon_shares[i] = (GroupElement)(A_shares[i] & 1) ^ keys[0].a_share[i];
+        delta_shares[i]   = (GroupElement)(B_shares[i] & 1) ^ keys[1].b_share[i];
+    }
+    
+    // 3. 交互一次，公开 epsilon 和 delta
+    reconstruct_big_bool(size, epsilon_shares); // 现在 epsilon_shares 存的是公开的 epsilon
+    reconstruct_big_bool(size, delta_shares);   // 现在 delta_shares 存的是公开的 delta
+    
+    GroupElement* epsilon_public = epsilon_shares;
+    GroupElement* delta_public = delta_shares;
+    
+    // 4. 本地计算最终结果 C = c ^ (eps & B) ^ (A & del) ^ (eps & del)
+    // CrypTen 公式: (b & eps) ^ (a & del) ^ (eps & del) ^ c
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        uint8_t eps = epsilon_public[i];
+        uint8_t del = delta_public[i];
+
+        // CrypTen 的公式需要 a 和 b 的份额，但这里用 A 和 B 也可以推导
+        // 公式: C = c ^ (eps & B) ^ (del & A) ^ (eps & del)
+        // 证明:
+        // C = c ^ ( (A^a) & B ) ^ ( (B^b) & A ) ^ ( (A^a) & (B^b) )
+        //   = c ^ (A&B ^ a&B) ^ (B&A ^ b&A) ^ (A&B ^ A&b ^ a&B ^ a&b)
+        //   = (c^a&b) ^ (A&B ^ a&B) ^ (B&A ^ b&A) ^ (A&B ^ A&b ^ a&B)
+        //   = (a&b^a&b) ^ (A&B) ... (所有项都抵消了)
+        // 更简单的 Beaver 公式: C = (eps & del) ^ (eps & b) ^ (del & a) ^ c
+        
+        uint8_t term1 = eps & del;
+        uint8_t term2 = eps & keys[0].b_share[i];
+        uint8_t term3 = del & keys[0].a_share[i];
+        
+        C_shares[i] = (GroupElement)(term1 ^ term2 ^ term3 ^ keys[0].c_share[i]);
+    }
+    
+    // 清理内存
+    //delete[] keys[0];
+    delete[] epsilon_shares;
+    delete[] delta_shares;
+}
+
+void extract_bit_shares(int32_t size, const GroupElement* arr, int bit_pos, GroupElement* out_bit_shares) {
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        // 本地右移并取最低位即可
+        out_bit_shares[i] = (arr[i] >> bit_pos) & 1;
+    }
+}
+
+// 串行全加器实现
+void SecureAdd(int32_t size, 
+               const GroupElement* A_shares, 
+               const GroupElement* B_shares, 
+               GroupElement* Sum_shares)
+{
+    if(party==DEALER){
+        GroupElement dummy_input1[size];
+        GroupElement dummy_input2[size];
+        GroupElement dummy_output[size];
+        for (int i = 0; i < bitlength; ++i) {
+            SecureAND(size, dummy_input1, dummy_input2, dummy_output);
+            SecureAND(size, dummy_input1, dummy_input2, dummy_output);
+        }
+        return;
+    }
+    const int bitlength = FSSConfig::bitlength; 
+
+    // 初始化最终结果和当前进位份额为 0
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        Sum_shares[i] = 0;
+    }
+    GroupElement* carry_in_shares = new GroupElement[size](); // 初始化为0
+
+    // 临时数组
+    GroupElement* a_i = new GroupElement[size];
+    GroupElement* b_i = new GroupElement[size];
+    GroupElement* half_sum = new GroupElement[size];
+    GroupElement* term1 = new GroupElement[size];
+    GroupElement* term2 = new GroupElement[size];
+    GroupElement* carry_out_shares = new GroupElement[size];
+
+    // 从最低位到最高位，逐位计算
+    for (int i = 0; i < bitlength; ++i) {
+        // 1. 提取 A 和 B 的第 i 位
+        extract_bit_shares(size, A_shares, i, a_i);
+        extract_bit_shares(size, B_shares, i, b_i);
+
+        // 2. 计算 Sum_i = a_i ^ b_i ^ carry_in
+        #pragma omp parallel for
+        for (int j = 0; j < size; ++j) {
+            half_sum[j] = a_i[j] ^ b_i[j];
+            GroupElement sum_i_share = half_sum[j] ^ carry_in_shares[j];
+            
+            // 将当前位的和的份额，加到最终结果的对应位置上
+            // (1ULL << i) 是一个公开常数，乘法是本地操作
+            Sum_shares[j] += sum_i_share * (1ULL << i);
+        }
+
+        // 3. 计算 Carry_out = (a_i & b_i) | (half_sum & carry_in)
+        // C_out = t1 | t2 = t1 ^ t2 ^ (t1 & t2)
+        
+        // 计算 t1 = a_i & b_i
+        SecureAND(size, a_i, b_i, term1);
+        
+        // 计算 t2 = half_sum & carry_in
+        SecureAND(size, half_sum, carry_in_shares, term2);
+
+        // 计算 C_out = t1 ^ t2
+        #pragma omp parallel for
+        for (int j = 0; j < size; ++j) {
+            carry_out_shares[j] = term1[j] ^ term2[j];
+        }
+
+        // 将 carry_out_shares 作为下一轮的 carry_in_shares
+        std::swap(carry_in_shares, carry_out_shares);
+    }
+
+    // 清理内存
+    delete[] carry_in_shares;
+    delete[] a_i;
+    delete[] b_i;
+    delete[] half_sum;
+    delete[] term1;
+    delete[] term2;
+    delete[] carry_out_shares;
+}
+
+/**
+ * @brief 高效并行加法器 (Kogge-Stone 架构)
+ * 通信轮数: 1 (初始化) + 6 (树状压缩) = 7 轮
+ * 适用于 FSS 框架下的 A2B 或大量算术加法
+ */
+/**
+ * @brief 高效并行加法器 (Kogge-Stone 架构)
+ * 核心：利用 SecureAND 的批量处理能力，在 log(64)=6 轮内完成进位合并
+ */
+void SecureAddParallel(int32_t size, 
+                       const GroupElement* A, 
+                       const GroupElement* B, 
+                       GroupElement* Sum)
+{
+    const int k = FSSConfig::bitlength; // 64
+    const int total_bits = size * k;
+
+    // --- 1. Dealer 离线模拟阶段 ---
+    if (party == DEALER) {
+        // 同步逻辑：1 (初始化) + 6 (树状迭代)
+        SecureAND(total_bits, nullptr, nullptr, nullptr);
+        for (int offset = 1; offset < k; offset <<= 1) {
+            SecureAND(2 * total_bits, nullptr, nullptr, nullptr);
+        }
+        return;
+    }
+
+    // --- 2. 在线阶段：铺平比特 (Flattening) ---
+    GroupElement* bits_G = new GroupElement[total_bits];
+    GroupElement* bits_P = new GroupElement[total_bits];
+    GroupElement* flat_A = new GroupElement[total_bits];
+    GroupElement* flat_B = new GroupElement[total_bits];
+
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        for (int b = 0; b < k; ++b) {
+            flat_A[i * k + b] = (A[i] >> b) & 1;
+            flat_B[i * k + b] = (B[i] >> b) & 1;
+        }
+    }
+
+    // 初始化初始进位信号：G = A & B, P = A ^ B
+    SecureAND(total_bits, flat_A, flat_B, bits_G);
+    #pragma omp parallel for
+    for (int i = 0; i < total_bits; ++i) {
+        bits_P[i] = flat_A[i] ^ flat_B[i];
+    }
+
+    // --- 3. 树状迭代 (Kogge-Stone 核心循环) ---
+    for (int offset = 1; offset < k; offset <<= 1) {
+        GroupElement* batch_left  = new GroupElement[2 * total_bits]();
+        GroupElement* batch_right = new GroupElement[2 * total_bits]();
+        GroupElement* batch_res   = new GroupElement[2 * total_bits];
+
+        #pragma omp parallel for
+        for (int i = 0; i < size; ++i) {
+            for (int j = offset; j < k; ++j) {
+                int curr = i * k + j;
+                int prev = i * k + (j - offset);
+                // 打包 G_new 和 P_new 的计算
+                batch_left[curr]  = bits_P[curr];
+                batch_right[curr] = bits_G[prev];
+                batch_left[curr + total_bits]  = bits_P[curr];
+                batch_right[curr + total_bits] = bits_P[prev];
+            }
+        }
+
+        SecureAND(2 * total_bits, batch_left, batch_right, batch_res);
+
+        #pragma omp parallel for
+        for (int i = 0; i < total_bits; ++i) {
+            int bit_idx = i % k;
+            if (bit_idx >= offset) {
+                bits_G[i] ^= batch_res[i];
+                bits_P[i]  = batch_res[i + total_bits];
+            }
+        }
+        delete[] batch_left; delete[] batch_right; delete[] batch_res;
+    }
+
+    // --- 4. 结果组装 ---
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        GroupElement res = (flat_A[i * k] ^ flat_B[i * k]);
+        for (int b = 1; b < k; ++b) {
+            GroupElement bit_sum = (flat_A[i * k + b] ^ flat_B[i * k + b]) ^ bits_G[i * k + (b - 1)];
+            res |= (bit_sum << b);
+        }
+        Sum[i] = res;
+    }
+
+    delete[] bits_G; delete[] bits_P; delete[] flat_A; delete[] flat_B;
+}
+
+void A2B(int size, const GroupElement* arithmetic_shares, GroupElement* binary_shares) {
+    if(party==DEALER){
+        GroupElement dummy_input1[size];
+        GroupElement dummy_input2[size];
+        GroupElement dummy_output[size];
+        SecureAdd(size, dummy_input1, dummy_input2, dummy_output);
+        return;
+    }
+    GroupElement* all_shares_as_binary = new GroupElement[size * 2];
+
+    for (int i = 0; i < 2; ++i) {
+        if (party - 2 == i) {
+            GroupElement share1[size];
+            GroupElement share2[size];
+            for(int i = 0;i<size;i++){
+                auto shares = splitShareXor(arithmetic_shares[i],1);
+                share1[i] = shares.first;
+                share2[i] = shares.second;
+            }
+            memcpy(all_shares_as_binary,share1,size*sizeof(GroupElement));
+            peer->send_batched_input(share2, size, bitlength);
+            peer->recv_batched_input(share2, size, bitlength);
+            memcpy(all_shares_as_binary,share2,size*sizeof(GroupElement));
+            //memcpy(all_shares_as_binary+size*sizeof(GroupElement),share2,size*sizeof(GroupElement));
+        } else {
+            GroupElement share1[size];
+            GroupElement share2[size];
+            GroupElement temp[size];
+            for(int i = 0;i<size;i++){
+                auto shares = splitShareXor(arithmetic_shares[i],1);
+                share1[i] = shares.first;
+                share2[i] = shares.second;
+            }
+            memcpy(all_shares_as_binary+size,share1,size*sizeof(GroupElement));
+            //memcpy(all_shares_as_binary+size*sizeof(GroupElement),share1,size*sizeof(GroupElement));
+            peer->recv_batched_input(temp, size, bitlength);
+            peer->send_batched_input(share2, size, bitlength);
+            memcpy(all_shares_as_binary,temp,size*sizeof(GroupElement));
+
+        }
+    }
+    peer->sync();
+    memcpy(binary_shares, all_shares_as_binary, size * sizeof(GroupElement));
+
+
+    SecureAdd(size, binary_shares, all_shares_as_binary +  size, binary_shares);
+    
+    delete[] all_shares_as_binary;
+}
+
+/**
+ * @brief 对算术秘密共享数组执行安全 ReLU 操作。
+ * 
+ * @param size      数组大小
+ * @param inArr     输入的算术份额数组 [x]
+ * @param outArr    输出的算术份额数组 ReLU([x])
+ */
+void SecureReLU(int32_t size, 
+                const GroupElement* inArr, 
+                GroupElement* outArr,int scale)
+{
+    int world_size = 2;
+    // === Dealer 逻辑 ===
+    if (party == DEALER) {
+        // Dealer 需要为所有底层的协议生成密钥
+        // 1. A2B 内部的 SecureAdd -> SecureAND
+        GroupElement dummy_input1[size];
+        GroupElement dummy_input2[size];
+        GroupElement dummy_output[size];
+        uint8_t* dummy_int1 = new uint8_t[size];
+        A2B(size,dummy_input1,dummy_input2);
+        // 2. B2A
+        B2A_Crypten(size, dummy_int1, dummy_input2);
+        
+        // 3. ElemWiseMul
+        ElemWiseMul(size, dummy_input1, dummy_input1, dummy_input2, dummy_input2, dummy_output, dummy_output);
+        
+        return;
+    }
+
+    // === 计算方逻辑 ===
+
+    // --- 步骤 1: 将算术份额 [x] 转换为二进制份额 <x> ---
+    GroupElement* x_binary_shares = new GroupElement[size];
+    // 这里需要一个 A2B 的实现，它内部会调用 SecureAdd 和 SecureAND
+    // 我们假设 A2B_Protocol 封装了这个逻辑
+    A2B(size, inArr, x_binary_shares);
+    
+    // --- 步骤 2: 提取符号位 <msb> 并计算比较结果 <res> = NOT <msb> ---
+    uint8_t* comparison_bit_shares = new uint8_t[size]; // B2A_Crypten 需要 uint8_t
+    
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        // a. 提取 MSB (本地右移)
+        uint8_t msb_share = (x_binary_shares[i] >> (FSSConfig::bitlength - 1)) & 1;
+        
+        // b. 计算 [x > 0] = NOT [msb]
+        //    NOT(a) = 1 ^ a. 只在一方执行异或1的操作。
+        if (party == SERVER) {
+            comparison_bit_shares[i] = 1 ^ msb_share;
+        } else {
+            comparison_bit_shares[i] = msb_share;
+        }
+    }
+    delete[] x_binary_shares;
+
+    // --- 步骤 3: 将比较结果的布尔份额 <res> 转换为算术份额 [res] ---
+    GroupElement* comparison_arith_shares = new GroupElement[size];
+    B2A_Crypten(size, comparison_bit_shares, comparison_arith_shares);
+    delete[] comparison_bit_shares;
+    
+    // --- 步骤 4: 计算最终结果 [y] = [x] * [res] ---
+    ElemWiseMul(size, inArr, nullptr, comparison_arith_shares, nullptr, outArr, nullptr);
+    
+    delete[] comparison_arith_shares;
+}
+
+
 
 GroupElement double_to_fixed(double val, int scale) {
     return static_cast<GroupElement>(round(val * (1LL << scale)));
@@ -2828,95 +3432,7 @@ void OptFastRelu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupEl
     }
 }
 
-/**
- * @brief 使用 Crypten 风格的 "Mask-Reconstruct-Compute" 协议将布尔份额转换为算术份额。
- * 
- * @param size 批量转换的大小。
- * @param x_shares 输入的布尔(XOR)份额数组。
- * @param y_shares 输出的算术(加性)份额数组。
- */
-void B2A_Crypten(int32_t size, const uint8_t* x_shares, GroupElement* y_shares)
-{
-    if (party == DEALER) {
-        // Dealer 调用对应的密钥生成函数
-        B2A_Crypten_KeyPack* server_keys = new B2A_Crypten_KeyPack[size];
-        B2A_Crypten_KeyPack* client_keys = new B2A_Crypten_KeyPack[size];
 
-
-        for (int i = 0; i < size; ++i) {
-            // 1. Dealer 生成一个随机比特 r
-            uint8_t r_plain = prngs[0].get<uint8_t>() & 1;
-
-            // 2. 创建 r 的 XOR 份额
-            auto r_xor_split = splitShareXor(r_plain,1); 
-            
-            // 3. 创建 r 的加性份额 (值为 0 或 1)
-            auto r_add_split = splitShare((GroupElement)r_plain, FSSConfig::bitlength);
-
-            // 4. 填充密钥包
-            server_keys[i].r_xor_share = static_cast<uint8_t>(r_xor_split.first);
-            server_keys[i].r_add_share = r_add_split.first;
-
-            client_keys[i].r_xor_share = static_cast<uint8_t>(r_xor_split.second);
-            client_keys[i].r_add_share = r_add_split.second;
-        }
-
-        // 5. 发送密钥包
-        server->send_b2a_crypten_keys(server_keys, size);
-        client->send_b2a_crypten_keys(client_keys, size);
-
-        delete[] server_keys;
-        delete[] client_keys;
-        return;
-    }
-
-    // --- 1. 接收来自 Dealer 的随机数份额 ---
-    std::vector<B2A_Crypten_KeyPack> keys(size);
-    dealer->recv_b2a_crypten_keys(keys.data(), size);
-    peer->sync(); // 确保双方都接收完毕
-
-    // --- 2. 本地计算被屏蔽后的值 d 的 XOR 份额 ---
-    std::vector<uint8_t> d_shares(size);
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        d_shares[i] = x_shares[i] ^ keys[i].r_xor_share;
-    }
-
-    // --- 3. 交互一次，重构以公开 d ---
-    // reconstruct 函数会交换份额并相加/异或。我们需要一个XOR版本的reconstruct。
-    // 如果你的 reconstruct 是加性的，我们需要修改。假设 reconstruct_bool 存在。
-    // 为了简单，我们手动实现。
-    std::vector<uint8_t> d_other_shares(size);
-    if (party == SERVER) {
-        peer->send_uint8_array(d_shares.data(), size);
-        peer->recv_uint8_array(d_other_shares.data(), size);
-    } else { // CLIENT
-        peer->recv_uint8_array(d_other_shares.data(), size);
-        peer->send_uint8_array(d_shares.data(), size);
-    }
-    
-    uint8_t* d_public = new uint8_t[size];
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        d_public[i] = d_shares[i] ^ d_other_shares[i];
-    }
-    
-    // --- 4. 本地计算最终的加性份额 ---
-    // [y] = d + [r] - 2*d*[r]
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        GroupElement d_val = d_public[i];
-        GroupElement r_add_share = keys[i].r_add_share;
-        
-        // 实现 [d] 的份额: 一方持有d，另一方持有0
-        GroupElement d_add_share = (party == CLIENT) ? d_val : 0;
-        
-        // 计算 -2*d*[r] 的份额 (本地操作)
-        GroupElement term3_share = -2 * d_val * r_add_share;
-
-        y_shares[i] = d_add_share + r_add_share + term3_share;
-    }
-}
 
 void clip_with_relu(int32_t size,GroupElement *inArr,GroupElement *outArr, GroupElement lower, GroupElement upper){
     GroupElement* clip_relu_in = new GroupElement[size * 2];
@@ -2966,30 +3482,6 @@ void clip_with_relu(int32_t size,GroupElement *inArr,GroupElement *outArr, Group
     }
 }
 
-void reconstruct_bool(int32_t size, uint8_t* arr)
-{
-    if (party == DEALER) return;
-
-    uint8_t* other_shares = new uint8_t[size];
-    if (party == SERVER) {
-        peer->send_uint8_array(arr, size);
-        peer->recv_uint8_array(other_shares, size);
-    } else { // CLIENT
-        peer->recv_uint8_array(other_shares, size);
-        peer->send_uint8_array(arr, size);
-    }
-
-    // 将份额异或起来得到明文
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        arr[i] = arr[i] ^ other_shares[i];
-    }
-    
-    delete[] other_shares;
-    
-    // 增加轮次计数，因为发生了一次交互
-    numRounds += 1; 
-}
 
 // =========================================================================
 // == 辅助函数: DPF三区间判断 (这个可以放在一个新文件 dpf_interval.cpp/h 中)
@@ -3671,36 +4163,7 @@ void SoftmaxODE(int32_t size,
 // == HELPER FUNCTION: Secure Exponential Approximation
 // =========================================================================
 // ================= DEBUG HELPER START (新增调试函数) =================
-// 请将此函数放在 SecureExpApprox 之前
-void debug_reconstruct_and_print(const std::string& tag, int32_t size, GroupElement* shares, int scale) {
-    if (party == DEALER) return; // Dealer 不参与重构
 
-    // 1. 拷贝一份份额，防止 reconstruct 修改原数据导致后续计算错误
-    GroupElement* temp = new GroupElement[size];
-    memcpy(temp, shares, size * sizeof(GroupElement));
-
-    // 2. 同步并重构
-    peer->sync();
-    reconstruct(size, temp, FSSConfig::bitlength);
-
-    // 3. 打印 (只由 SERVER 打印，避免日志混乱)
-    if (party == SERVER) {
-        std::cout << "\n[DEBUG] >>> " << tag << " <<<" << std::endl;
-        // 为了防止刷屏，只打印前 10 个数据，你可以根据需要修改这个限制
-        int limit = (size > 10) ? 10 : size; 
-        for (int i = 0; i < limit; ++i) {
-            double val = fixed_to_double(temp[i], scale);
-            // 同时打印 int64 和 double 值，方便检查是否发生溢出(如出现极大的正整数)
-            std::cout << "  [" << i << "] Raw: " << (int64_t)temp[i] 
-                      << " | Double: " << val << std::endl;
-        }
-        if (size > limit) std::cout << "  ... (total " << size << " items)" << std::endl;
-        std::cout << "----------------------------------------" << std::endl;
-    }
-    
-    delete[] temp;
-    peer->sync(); // 打印结束再次同步，确保多方步调一致
-}
 // ================= DEBUG HELPER END =================
 // ================= 使用 Relu2Round 协议计算 dReLU =================
 // 这个函数专门封装 evalRelu2_drelu，用于替换 SlothDrelu
@@ -3785,6 +4248,12 @@ void SecureExpApprox(int32_t size,
             //SlothARS(size, dummy1, dummy1, scale, "ExpApprox::Taylor");
         }
 
+        // // 2. Clip Keys (SlothDrelu)
+        // SlothDrelu(size, bitlength, dummy1, dummy2, "ExpApprox::Clip");
+        // //FastRelu2RoundDrelu(size, bitlength, dummy1, dummy2, "ExpApprox::Clip");
+        
+        // // 3. Select Keys
+        // Select(size, dummy2, dummy1, dummy1, "ExpApprox::Select");
 
         delete[] dummy1; 
         delete[] dummy2;
@@ -3824,7 +4293,46 @@ void SecureExpApprox(int32_t size,
         if (next_res != term_shares) delete[] next_res;
         else delete[] current_res;
     }
+
+    // [DEBUG] Taylor 结果 (这里有些负数/下溢是正常的，关键看后面选不选它)
+    //debug_reconstruct_and_print("SecureExpApprox: Taylor Raw Result", size, taylor_results, scale);
     memcpy(outArr,taylor_results, size * sizeof(GroupElement));
+    // === Part 2: Clip Condition (SlothDrelu) ===
+    // const double T_exp_double = -13.0; // 阈值
+    // GroupElement T_exp_fixed = double_to_fixed(T_exp_double, scale);
+
+    // GroupElement* diff_shares = new GroupElement[size];
+    // GroupElement* is_ge_shares = new GroupElement[size]; // [x >= -13]
+
+    // #pragma omp parallel for
+    // for (int i = 0; i < size; ++i) {
+    //     if (party == SERVER) diff_shares[i] = inArr[i] - T_exp_fixed;
+    //     else diff_shares[i] = inArr[i];
+    // }
+    // debug_reconstruct_and_print("SecureExpApprox:  inArr[i] - T_exp_fixed", size, diff_shares, scale);
+    // // 计算 [diff >= 0] 即 [x >= -13]
+    // SlothDrelu(size, bitlength, diff_shares, is_ge_shares, "ExpApprox::Clip");
+    // //FastRelu2RoundDrelu(size, bitlength, diff_shares, is_ge_shares, "ExpApprox::Clip");
+    // // [DEBUG] 打印 "是否 >= -13" (1=保留, 0=置零)
+    // for(int i=0; i<size; ++i){
+    //     if(party==SERVER){
+    //         std::cout << is_ge_shares[i] << " ";
+    //     }
+    // }
+    // std::cout << std::endl;
+    // //debug_reconstruct_and_print("SecureExpApprox: Is GreaterOrEqual -13? (1=Keep, 0=Zero)", size, is_ge_shares, 0);
+
+    // // === Part 3: Selection ===
+    // // 【核心修复】直接使用 is_ge_shares 作为选择位
+    // // 如果 is_ge 为 1，结果 = 1 * taylor = taylor
+    // // 如果 is_ge 为 0，结果 = 0 * taylor = 0
+    // Select(size, is_ge_shares, taylor_results, outArr, "ExpApprox::Select");
+
+    // debug_reconstruct_and_print("SecureExpApprox: Final Output", size, outArr, scale);
+
+    // delete[] taylor_results;
+    // delete[] diff_shares;
+    // delete[] is_ge_shares;
 }
 
 // ================= SoftmaxBumbleBee (带调试功能的完整版) =================
