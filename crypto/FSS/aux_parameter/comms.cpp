@@ -2241,11 +2241,34 @@ void Dealer::recv_b2a_crypten_keys(B2A_Crypten_KeyPack* keys, int32_t size) {
 }
 
 
-void Peer::send_secureand_key(const SecureANDKeyPack* keys,int32_t size){
-    keyBuf->write((char*)keys, size*sizeof(SecureANDKeyPack));
+void Peer::send_secureand_key(const SecureANDKeyPack* keys, int32_t num_packs) {
+    for (int i = 0; i < num_packs; ++i) {
+        // 1. 先写 size 元数据，告知对方接下来要收多大的数组
+        keyBuf->write((char*)&keys[i].size, sizeof(int32_t));
+
+        // 2. 写入 a, b, c 三个数组的实际内容 (Deep Copy)
+        size_t array_bytes = keys[i].size * sizeof(GroupElement);
+        keyBuf->write((char*)keys[i].a_share, array_bytes);
+        keyBuf->write((char*)keys[i].b_share, array_bytes);
+        keyBuf->write((char*)keys[i].c_share, array_bytes);
+    }
 }
 
-void Dealer::recv_secureand_key(SecureANDKeyPack* keys, int32_t size){
-    SecureANDKeyPack key;
-    keyBuf->read((char*)keys, size*sizeof(SecureANDKeyPack));
+void Dealer::recv_secureand_key(SecureANDKeyPack* keys, int32_t num_packs) {
+    for (int i = 0; i < num_packs; ++i) {
+        // 1. 先读出 size
+        keyBuf->read((char*)&keys[i].size, sizeof(int32_t));
+
+        // 2. 根据读到的 size 动态申请内存
+        // 注意：这块内存需要在使用完后手动 delete[]，否则会内存泄漏
+        keys[i].a_share = new GroupElement[keys[i].size];
+        keys[i].b_share = new GroupElement[keys[i].size];
+        keys[i].c_share = new GroupElement[keys[i].size];
+
+        // 3. 将缓冲区的数据读入新分配的内存空间
+        size_t array_bytes = keys[i].size * sizeof(GroupElement);
+        keyBuf->read((char*)keys[i].a_share, array_bytes);
+        keyBuf->read((char*)keys[i].b_share, array_bytes);
+        keyBuf->read((char*)keys[i].c_share, array_bytes);
+    }
 }

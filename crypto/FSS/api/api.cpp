@@ -2507,7 +2507,7 @@ void SecureAND(int32_t size,
         temp = keys[0].a_share[i];
         epsilon_shares[i] = temp;
         epsilon_shares[i] = (GroupElement)(A_shares[i] & 1) ^ keys[0].a_share[i];
-        delta_shares[i]   = (GroupElement)(B_shares[i] & 1) ^ keys[1].b_share[i];
+        delta_shares[i]   = (GroupElement)(B_shares[i] & 1) ^ keys[0].b_share[i];
     }
     
     // 3. 交互一次，公开 epsilon 和 delta
@@ -2542,6 +2542,9 @@ void SecureAND(int32_t size,
     
     // 清理内存
     //delete[] keys[0];
+    delete[] keys[0].a_share;
+    delete[] keys[0].b_share;
+    delete[] keys[0].c_share;
     delete[] epsilon_shares;
     delete[] delta_shares;
 }
@@ -2652,10 +2655,16 @@ void SecureAddParallel(int32_t size,
 
     // --- 1. Dealer 离线模拟阶段 ---
     if (party == DEALER) {
+        GroupElement *dummy_input1 = new GroupElement[total_bits];
+        GroupElement *dummy_input2 = new GroupElement[total_bits];
+        GroupElement *dummy_output = new GroupElement[total_bits];
         // 同步逻辑：1 (初始化) + 6 (树状迭代)
-        SecureAND(total_bits, nullptr, nullptr, nullptr);
+        SecureAND(total_bits, dummy_input1, dummy_input2, dummy_output);
+        dummy_input1 = new GroupElement[2*total_bits];
+        dummy_input2 = new GroupElement[2*total_bits];
+        dummy_output = new GroupElement[2*total_bits];
         for (int offset = 1; offset < k; offset <<= 1) {
-            SecureAND(2 * total_bits, nullptr, nullptr, nullptr);
+            SecureAND(2 * total_bits, dummy_input1, dummy_input2, dummy_output);
         }
         return;
     }
@@ -2683,8 +2692,8 @@ void SecureAddParallel(int32_t size,
 
     // --- 3. 树状迭代 (Kogge-Stone 核心循环) ---
     for (int offset = 1; offset < k; offset <<= 1) {
-        GroupElement* batch_left  = new GroupElement[2 * total_bits]();
-        GroupElement* batch_right = new GroupElement[2 * total_bits]();
+        GroupElement* batch_left  = new GroupElement[2 * total_bits];
+        GroupElement* batch_right = new GroupElement[2 * total_bits];
         GroupElement* batch_res   = new GroupElement[2 * total_bits];
 
         #pragma omp parallel for
@@ -2732,7 +2741,7 @@ void A2B(int size, const GroupElement* arithmetic_shares, GroupElement* binary_s
         GroupElement dummy_input1[size];
         GroupElement dummy_input2[size];
         GroupElement dummy_output[size];
-        SecureAdd(size, dummy_input1, dummy_input2, dummy_output);
+        SecureAddParallel(size, dummy_input1, dummy_input2, dummy_output);
         return;
     }
     GroupElement* all_shares_as_binary = new GroupElement[size * 2];
@@ -2772,7 +2781,7 @@ void A2B(int size, const GroupElement* arithmetic_shares, GroupElement* binary_s
     memcpy(binary_shares, all_shares_as_binary, size * sizeof(GroupElement));
 
 
-    SecureAdd(size, binary_shares, all_shares_as_binary +  size, binary_shares);
+    SecureAddParallel(size, binary_shares, all_shares_as_binary +  size, binary_shares);
     
     delete[] all_shares_as_binary;
 }
