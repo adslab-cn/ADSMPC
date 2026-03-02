@@ -2322,17 +2322,37 @@ void reconstruct_big_bool(int32_t size, GroupElement* arr)
 
     GroupElement* other_shares = new GroupElement[size];
     if (party == SERVER) {
-        peer->send_uint64_array(arr, size);
-        peer->recv_uint64_array(other_shares, size);
+        peer->send_uint64_array(arr, size*sizeof(GroupElement));
+        peer->recv_uint64_array(other_shares, size*sizeof(GroupElement));
     } else { // CLIENT
-        peer->recv_uint64_array(other_shares, size);
-        peer->send_uint64_array(arr, size);
+        peer->recv_uint64_array(other_shares, size*sizeof(GroupElement));
+        peer->send_uint64_array(arr, size*sizeof(GroupElement));
     }
+    //     for(int i = 0; i<size;i++){
+    //     std::bitset<64> b2(static_cast<uint64_t>(other_shares[i]));
+    //     std::bitset<64> b3(static_cast<uint64_t>(arr[i]));
 
+    //     std::string bin2 = b2.to_string().substr(64 - bitlength);
+    //     std::string bin3 = b3.to_string().substr(64 - bitlength);
+
+    //     //std::cout << "Index [" << i << "] Binary: 0b" << bin2 << " = "<< bin3 << std::endl;
+    // }
     // 将份额异或起来得到明文
     #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
+        //std::bitset<64> b1(static_cast<uint64_t>(arr[i]));
+
         arr[i] = arr[i] ^ other_shares[i];
+        
+        
+        // std::bitset<64> b2(static_cast<uint64_t>(other_shares[i]));
+        // std::bitset<64> b3(static_cast<uint64_t>(arr[i]));
+
+        // std::string bin1 = b1.to_string().substr(64 - bitlength);
+        // std::string bin2 = b2.to_string().substr(64 - bitlength);
+        // std::string bin3 = b3.to_string().substr(64 - bitlength);
+
+        //std::cout << "Index [" << i << "] Binary: 0b" << bin1 << " ^ " << bin2 << " = "<< bin3 << std::endl;
     }
     
     delete[] other_shares;
@@ -2386,7 +2406,7 @@ void ElemWiseMul(int32_t size,
         uint64_t scale_down_time = time_this_block([&]() {
              ARS_CrypTen_Style(size, z_full_precision, C, scale);
         });
-        debug_reconstruct_and_print("ElemWiseMul: C", size, C, scale);
+        //debug_reconstruct_and_print("ElemWiseMul: C", size, C, scale);
         FSS::push_stats({"ARS", 0, scale_down_time, 0, 0, 0});
         // 4. 清理内存
         delete[] key.a; delete[] key.b; delete[] key.c;
@@ -2462,6 +2482,120 @@ std::pair<SecureANDKeyPack, SecureANDKeyPack> keyGenSecureAND(int32_t size) {
     return std::make_pair(k0, k1);
 }
 
+
+GroupElement double_to_fixed(double val, int scale) {
+    return static_cast<GroupElement>(round(val * (1LL << scale)));
+}
+
+// 将定点数 GroupElement 转换回 double
+double fixed_to_double(GroupElement val, int scale) {
+    // 处理负数 (补码)
+    int bitlength = FSSConfig::bitlength;
+    if (val & (1ULL << (bitlength - 1))) {
+        int64_t signed_val = val - (1ULL << bitlength);
+        return static_cast<double>(signed_val) / (1LL << scale);
+    }
+    return static_cast<double>(val) / (1LL << scale);
+}
+
+
+void debug_reconstruct_and_print_bool(const std::string& tag, int32_t size, uint8_t* shares) {
+    uint8_t* temp = new uint8_t[size];
+    memcpy(temp, shares, size * sizeof(uint8_t));
+    
+    reconstruct_bool(size, temp); // 之前代码中定义的 uint8_t 异或重构
+
+    if (party == SERVER) {
+        std::cout << ">>> " << tag << " <<<" << std::endl;
+        for (int i = 0; i < size; ++i) {
+            std::cout << "  [" << i << "]: " << (int)temp[i] << std::endl;
+        }
+    }
+    delete[] temp;
+}
+
+void debug_reconstruct_and_print(const std::string& tag, int32_t size, const GroupElement* shares, 
+                                 int scale, bool isXor, int print_count = -1) {
+    // 1. 准备本地副本用于重构
+    GroupElement* temp = new GroupElement[size];
+    memcpy(temp, shares, size * sizeof(GroupElement));
+    
+    // 2. 执行重构 (这是同步操作，双方都会运行)
+    if (isXor) {
+        reconstruct_big_bool(size, temp); // XOR 重构
+    } else {
+        reconstruct(size, temp, FSSConfig::bitlength); // 算术重构
+    }
+
+    // 3. 确定打印范围
+    int actual_print_limit = (print_count == -1) ? size : std::min(size, print_count);
+
+    // 这里的 if(party == SERVER0) 或类似的判断可以保留，防止双端同时打印造成乱码
+    // 如果你希望两边都看，可以根据 party 调整前缀
+    std::cout << "\n" << std::string(60, '=') << std::endl;
+    std::cout << ">>> DEBUG RECONSTRUCT: [" << tag << "] <<<" << std::endl;
+    std::cout << "Showing " << actual_print_limit << " out of " << size << " elements." << std::endl;
+    std::cout << std::string(60, '-') << std::endl;
+
+    for (int i = 0; i < actual_print_limit; ++i) {
+        GroupElement val = temp[i];
+
+        // --- 各种形式的转换 ---
+        // 1. 小数形式 (Fixed to Double)
+        double d_val = fixed_to_double(val, scale);
+        
+        // 2. 无符号形式
+        uint64_t u_val = (uint64_t)val;
+        
+        // 3. 有符号形式 (处理补码)
+        int64_t s_val = (int64_t)val;
+        // 如果 bitlength 不是 64，需要手动处理符号位扩展，这里假设是 64 位
+        // 如果是 32 位可以：s_val = (int32_t)val;
+
+        // 4. 二进制形式 (只显示有效的 bitlength 位)
+        int bitlen = FSSConfig::bitlength;
+        std::string binary_str = std::bitset<64>(u_val).to_string();
+        binary_str = binary_str.substr(64 - bitlen); // 截取低位有效部分
+
+        // --- 格式化输出 ---
+        std::cout << "INDEX [" << std::setw(2) << i << "]" << std::endl;
+        std::cout << "  - Decimal:  " << std::fixed << std::setprecision(8) << d_val << std::endl;
+        std::cout << "  - Unsigned: " << u_val << std::endl;
+        std::cout << "  - Signed:   " << s_val << std::endl;
+        std::cout << "  - Binary:   0b" << binary_str << std::endl;
+        std::cout << std::string(40, '.') << std::endl;
+    }
+
+    std::cout << std::string(60, '=') << "\n" << std::endl;
+
+    delete[] temp;
+}
+
+void debug_print_flattened(const std::string& tag, int size, int k, const GroupElement* flattened_shares) {
+    int total_bits = size * k;
+    GroupElement* temp = new GroupElement[total_bits];
+    memcpy(temp, flattened_shares, total_bits * sizeof(GroupElement));
+
+    // 1. 重构这些比特份额 (由于是比特级操作，通常使用 XOR 重构)
+    reconstruct_big_bool(total_bits, temp);
+
+    // 2. 格式化输出：每 k 位代表一个原本的数
+    std::cout << ">>> [" << tag << "] Binary State <<<" << std::endl;
+    for (int i = 0; i < size; ++i) {
+        std::cout << "  Element[" << i << "]: 0b";
+        // 从高位 (k-1) 打印到低位 (0)
+        for (int b = k - 1; b >= 0; --b) {
+            // 获取重构后的比特值 (取最低位)
+            uint8_t bit_val = (uint8_t)(temp[i * k + b] & 1);
+            std::cout << (int)bit_val;
+        }
+        std::cout << std::endl;
+    }
+    std::cout << "---------------------------------------" << std::endl;
+
+    delete[] temp;
+}
+
 /**
  * @brief 对两个布尔秘密共享数组执行安全 AND 操作。
  * 
@@ -2498,10 +2632,10 @@ void SecureAND(int32_t size,
     GroupElement* epsilon_shares = new GroupElement[size];
     GroupElement* delta_shares = new GroupElement[size];
 
-    //#pragma omp parallel for
+    #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
         // A_shares 是 GroupElement (uint64_t), 但我们只关心最低位
-        std::cout<<party<<": "<<i<<std::endl;
+        //std::cout<<party<<": "<<i<<std::endl;
         GroupElement temp;
         temp = A_shares[i];
         temp = keys[0].a_share[i];
@@ -2533,7 +2667,7 @@ void SecureAND(int32_t size,
         //   = (a&b^a&b) ^ (A&B) ... (所有项都抵消了)
         // 更简单的 Beaver 公式: C = (eps & del) ^ (eps & b) ^ (del & a) ^ c
         
-        uint8_t term1 = eps & del;
+        uint8_t term1 = (party == SERVER) ? (uint8_t)(eps & del) : 0;
         uint8_t term2 = eps & keys[0].b_share[i];
         uint8_t term3 = del & keys[0].a_share[i];
         
@@ -2557,90 +2691,7 @@ void extract_bit_shares(int32_t size, const GroupElement* arr, int bit_pos, Grou
     }
 }
 
-// 串行全加器实现
-void SecureAdd(int32_t size, 
-               const GroupElement* A_shares, 
-               const GroupElement* B_shares, 
-               GroupElement* Sum_shares)
-{
-    if(party==DEALER){
-        GroupElement dummy_input1[size];
-        GroupElement dummy_input2[size];
-        GroupElement dummy_output[size];
-        for (int i = 0; i < bitlength; ++i) {
-            SecureAND(size, dummy_input1, dummy_input2, dummy_output);
-            SecureAND(size, dummy_input1, dummy_input2, dummy_output);
-        }
-        return;
-    }
-    const int bitlength = FSSConfig::bitlength; 
 
-    // 初始化最终结果和当前进位份额为 0
-    #pragma omp parallel for
-    for (int i = 0; i < size; ++i) {
-        Sum_shares[i] = 0;
-    }
-    GroupElement* carry_in_shares = new GroupElement[size](); // 初始化为0
-
-    // 临时数组
-    GroupElement* a_i = new GroupElement[size];
-    GroupElement* b_i = new GroupElement[size];
-    GroupElement* half_sum = new GroupElement[size];
-    GroupElement* term1 = new GroupElement[size];
-    GroupElement* term2 = new GroupElement[size];
-    GroupElement* carry_out_shares = new GroupElement[size];
-
-    // 从最低位到最高位，逐位计算
-    for (int i = 0; i < bitlength; ++i) {
-        // 1. 提取 A 和 B 的第 i 位
-        extract_bit_shares(size, A_shares, i, a_i);
-        extract_bit_shares(size, B_shares, i, b_i);
-
-        // 2. 计算 Sum_i = a_i ^ b_i ^ carry_in
-        #pragma omp parallel for
-        for (int j = 0; j < size; ++j) {
-            half_sum[j] = a_i[j] ^ b_i[j];
-            GroupElement sum_i_share = half_sum[j] ^ carry_in_shares[j];
-            
-            // 将当前位的和的份额，加到最终结果的对应位置上
-            // (1ULL << i) 是一个公开常数，乘法是本地操作
-            Sum_shares[j] += sum_i_share * (1ULL << i);
-        }
-
-        // 3. 计算 Carry_out = (a_i & b_i) | (half_sum & carry_in)
-        // C_out = t1 | t2 = t1 ^ t2 ^ (t1 & t2)
-        
-        // 计算 t1 = a_i & b_i
-        SecureAND(size, a_i, b_i, term1);
-        
-        // 计算 t2 = half_sum & carry_in
-        SecureAND(size, half_sum, carry_in_shares, term2);
-
-        // 计算 C_out = t1 ^ t2
-        #pragma omp parallel for
-        for (int j = 0; j < size; ++j) {
-            carry_out_shares[j] = term1[j] ^ term2[j];
-        }
-
-        // 将 carry_out_shares 作为下一轮的 carry_in_shares
-        std::swap(carry_in_shares, carry_out_shares);
-    }
-
-    // 清理内存
-    delete[] carry_in_shares;
-    delete[] a_i;
-    delete[] b_i;
-    delete[] half_sum;
-    delete[] term1;
-    delete[] term2;
-    delete[] carry_out_shares;
-}
-
-/**
- * @brief 高效并行加法器 (Kogge-Stone 架构)
- * 通信轮数: 1 (初始化) + 6 (树状压缩) = 7 轮
- * 适用于 FSS 框架下的 A2B 或大量算术加法
- */
 /**
  * @brief 高效并行加法器 (Kogge-Stone 架构)
  * 核心：利用 SecureAND 的批量处理能力，在 log(64)=6 轮内完成进位合并
@@ -2684,7 +2735,15 @@ void SecureAddParallel(int32_t size,
     }
 
     // 初始化初始进位信号：G = A & B, P = A ^ B
+    //debug_print_flattened("flat_A_BEFORE_AND", size, k, flat_A);
+    //debug_print_flattened("flat_B_BEFORE_AND", size, k, flat_B);
+
+    // 执行初始化进位计算：G = A & B
     SecureAND(total_bits, flat_A, flat_B, bits_G);
+
+    // 【插入打印 G】
+    // 这里的 G 应该是 A 和 B 逐位进行 AND 的结果
+    //debug_print_flattened("bits_G_AFTER_AND", size, k, bits_G);
     #pragma omp parallel for
     for (int i = 0; i < total_bits; ++i) {
         bits_P[i] = flat_A[i] ^ flat_B[i];
@@ -2745,130 +2804,269 @@ void A2B(int size, const GroupElement* arithmetic_shares, GroupElement* binary_s
         return;
     }
     GroupElement* all_shares_as_binary = new GroupElement[size * 2];
+    //debug_reconstruct_and_print("input",size,arithmetic_shares,16,false);
+    // for (int i = 0; i < size; i++) {
+    //     // 将 GroupElement 转换为 64 位无符号数，再转为位集
+    //     std::bitset<64> binary(static_cast<uint64_t>(arithmetic_shares[i]));
+        
+    //     // 如果你只想看低 bitlength 位（比如 32 位），可以截取字符串
+    //     std::string bin_str = binary.to_string().substr(64 - bitlength);
 
-    for (int i = 0; i < 2; ++i) {
-        if (party - 2 == i) {
-            GroupElement share1[size];
-            GroupElement share2[size];
-            for(int i = 0;i<size;i++){
-                auto shares = splitShareXor(arithmetic_shares[i],1);
-                share1[i] = shares.first;
-                share2[i] = shares.second;
-            }
-            memcpy(all_shares_as_binary,share1,size*sizeof(GroupElement));
-            peer->send_batched_input(share2, size, bitlength);
-            peer->recv_batched_input(share2, size, bitlength);
-            memcpy(all_shares_as_binary,share2,size*sizeof(GroupElement));
-            //memcpy(all_shares_as_binary+size*sizeof(GroupElement),share2,size*sizeof(GroupElement));
-        } else {
-            GroupElement share1[size];
-            GroupElement share2[size];
-            GroupElement temp[size];
-            for(int i = 0;i<size;i++){
-                auto shares = splitShareXor(arithmetic_shares[i],1);
-                share1[i] = shares.first;
-                share2[i] = shares.second;
-            }
-            memcpy(all_shares_as_binary+size,share1,size*sizeof(GroupElement));
-            //memcpy(all_shares_as_binary+size*sizeof(GroupElement),share1,size*sizeof(GroupElement));
-            peer->recv_batched_input(temp, size, bitlength);
-            peer->send_batched_input(share2, size, bitlength);
-            memcpy(all_shares_as_binary,temp,size*sizeof(GroupElement));
+    //     std::cout << "Index [" << i << "] Binary: 0b" << bin_str << std::endl;
+    // }
+    if (party == SERVER) {
+        GroupElement share1[size];
+        GroupElement share2[size];
+        GroupElement temp[size];
+        for(int i = 0;i<size;i++){
+            auto shares = splitShareXor(arithmetic_shares[i],FSSConfig::bitlength);
+            share1[i] = shares.first;
+            share2[i] = shares.second;
+
+            // uint64_t orig = static_cast<uint64_t>(arithmetic_shares[i]);
+            // uint64_t s1   = static_cast<uint64_t>(share1[i]);
+            // uint64_t s2   = static_cast<uint64_t>(share2[i]);
+            // uint64_t xor_res = s1 ^ s2;
+            // int bits = FSSConfig::bitlength;
+
+            // std::cout << "--- Local Split Debug [Index " << i << "] ---" << std::endl;
+            
+            // // 打印原始算术值
+            // std::cout << "  Original (Arithmetic): 0b" 
+            //         << std::bitset<64>(orig).to_string().substr(64 - bits) 
+            //         << " (Val: " << (int64_t)orig << ")" << std::endl;
+            
+            // // 打印拆分后的两个份额
+            // std::cout << "  Split Share 1 (XOR):   0b" 
+            //         << std::bitset<64>(s1).to_string().substr(64 - bits) << std::endl;
+            // std::cout << "  Split Share 2 (XOR):   0b" 
+            //         << std::bitset<64>(s2).to_string().substr(64 - bits) << std::endl;
+            
+            // // 打印亦或结果并校验
+            // std::cout << "  XOR Result (s1 ^ s2):  0b" 
+            //         << std::bitset<64>(xor_res).to_string().substr(64 - bits) << std::endl;
+            
+            // if (xor_res == orig) {
+            //     std::cout << "  [CHECK]: PASS (XOR sum matches original)" << std::endl;
+            // } else {
+            //     std::cout << "  [CHECK]: !!! FAIL !!! (XOR sum mismatch)" << std::endl;
+            // }
+            // std::cout << "---------------------------------------" << std::endl;
 
         }
+        memcpy(all_shares_as_binary,share1,size*sizeof(GroupElement));
+        peer->send_batched_input(share2, size, bitlength);
+        peer->recv_batched_input(temp, size, bitlength);
+        //memcpy(all_shares_as_binary,share2,size*sizeof(GroupElement));
+        memcpy(all_shares_as_binary+size,temp,size*sizeof(GroupElement));
+    } else if(party == CLIENT){
+        GroupElement share1[size];
+        GroupElement share2[size];
+        GroupElement temp[size];
+        for(int i = 0;i<size;i++){
+            auto shares = splitShareXor(arithmetic_shares[i],FSSConfig::bitlength);
+            share1[i] = shares.first;
+            share2[i] = shares.second;
+
+            // uint64_t orig = static_cast<uint64_t>(arithmetic_shares[i]);
+            // uint64_t s1   = static_cast<uint64_t>(share1[i]);
+            // uint64_t s2   = static_cast<uint64_t>(share2[i]);
+            // uint64_t xor_res = s1 ^ s2;
+            // int bits = FSSConfig::bitlength;
+
+            // std::cout << "--- Local Split Debug [Index " << i << "] ---" << std::endl;
+            
+            // // 打印原始算术值
+            // std::cout << "  Original (Arithmetic): 0b" 
+            //         << std::bitset<64>(orig).to_string().substr(64 - bits) 
+            //         << " (Val: " << (int64_t)orig << ")" << std::endl;
+            
+            // // 打印拆分后的两个份额
+            // std::cout << "  Split Share 1 (XOR):   0b" 
+            //         << std::bitset<64>(s1).to_string().substr(64 - bits) << std::endl;
+            // std::cout << "  Split Share 2 (XOR):   0b" 
+            //         << std::bitset<64>(s2).to_string().substr(64 - bits) << std::endl;
+            
+            // // 打印亦或结果并校验
+            // std::cout << "  XOR Result (s1 ^ s2):  0b" 
+            //         << std::bitset<64>(xor_res).to_string().substr(64 - bits) << std::endl;
+            
+            // if (xor_res == orig) {
+            //     std::cout << "  [CHECK]: PASS (XOR sum matches original)" << std::endl;
+            // } else {
+            //     std::cout << "  [CHECK]: !!! FAIL !!! (XOR sum mismatch)" << std::endl;
+            // }
+            // std::cout << "---------------------------------------" << std::endl;
+
+
+        }
+        //memcpy(all_shares_as_binary+size,share1,size*sizeof(GroupElement));
+        memcpy(all_shares_as_binary+size,share1,size*sizeof(GroupElement));
+        peer->recv_batched_input(temp, size, bitlength);
+        peer->send_batched_input(share2, size, bitlength);
+        memcpy(all_shares_as_binary,temp,size*sizeof(GroupElement));
+
     }
+
+    // for (int i = 0; i < size*2; i++) {
+    //     std::bitset<64> binary(static_cast<uint64_t>(all_shares_as_binary[i]));
+        
+    //     std::string bin_str = binary.to_string().substr(64 - bitlength);
+
+    //     std::cout << "Index [" << i << "] Binary: 0b" << bin_str << std::endl;
+    // }
     peer->sync();
+    //debug_reconstruct_and_print("big share",size*2,all_shares_as_binary,16,true);
     memcpy(binary_shares, all_shares_as_binary, size * sizeof(GroupElement));
 
 
     SecureAddParallel(size, binary_shares, all_shares_as_binary +  size, binary_shares);
-    
+    //debug_reconstruct_and_print("result",size,binary_shares,16,true);
     delete[] all_shares_as_binary;
 }
 
-/**
- * @brief 对算术秘密共享数组执行安全 ReLU 操作。
- * 
- * @param size      数组大小
- * @param inArr     输入的算术份额数组 [x]
- * @param outArr    输出的算术份额数组 ReLU([x])
- */
+// /**
+//  * @brief 对算术秘密共享数组执行安全 ReLU 操作。
+//  * 
+//  * @param size      数组大小
+//  * @param inArr     输入的算术份额数组 [x]
+//  * @param outArr    输出的算术份额数组 ReLU([x])
+//  */
+// void SecureReLU(int32_t size, 
+//                 const GroupElement* inArr, 
+//                 GroupElement* outArr,int scale)
+// {
+//     int world_size = 2;
+//     // === Dealer 逻辑 ===
+//     if (party == DEALER) {
+//         // Dealer 需要为所有底层的协议生成密钥
+//         // 1. A2B 内部的 SecureAdd -> SecureAND
+//         GroupElement dummy_input1[size];
+//         GroupElement dummy_input2[size];
+//         GroupElement dummy_output[size];
+//         uint8_t* dummy_int1 = new uint8_t[size];
+//         A2B(size,dummy_input1,dummy_input2);
+//         // 2. B2A
+//         B2A_Crypten(size, dummy_int1, dummy_input2);
+        
+//         // 3. ElemWiseMul
+//         ElemWiseMul(size, dummy_input1, dummy_input1, dummy_input2, dummy_input2, dummy_output, dummy_output);
+        
+//         return;
+//     }
+
+//     // === 计算方逻辑 ===
+
+//     // --- 步骤 1: 将算术份额 [x] 转换为二进制份额 <x> ---
+//     GroupElement* x_binary_shares = new GroupElement[size];
+//     // 这里需要一个 A2B 的实现，它内部会调用 SecureAdd 和 SecureAND
+//     // 我们假设 A2B_Protocol 封装了这个逻辑
+//     A2B(size, inArr, x_binary_shares);
+    
+//     // --- 步骤 2: 提取符号位 <msb> 并计算比较结果 <res> = NOT <msb> ---
+//     uint8_t* comparison_bit_shares = new uint8_t[size]; // B2A_Crypten 需要 uint8_t
+    
+//     #pragma omp parallel for
+//     for (int i = 0; i < size; ++i) {
+//         // a. 提取 MSB (本地右移)
+//         uint8_t msb_share = (x_binary_shares[i] >> (FSSConfig::bitlength - 1)) & 1;
+        
+//         // b. 计算 [x > 0] = NOT [msb]
+//         //    NOT(a) = 1 ^ a. 只在一方执行异或1的操作。
+//         if (party == SERVER) {
+//             comparison_bit_shares[i] = 1 ^ msb_share;
+//         } else {
+//             comparison_bit_shares[i] = msb_share;
+//         }
+//     }
+//     delete[] x_binary_shares;
+
+//     // --- 步骤 3: 将比较结果的布尔份额 <res> 转换为算术份额 [res] ---
+//     GroupElement* comparison_arith_shares = new GroupElement[size];
+//     B2A_Crypten(size, comparison_bit_shares, comparison_arith_shares);
+//     delete[] comparison_bit_shares;
+    
+//     // --- 步骤 4: 计算最终结果 [y] = [x] * [res] ---
+//     ElemWiseMul(size, inArr, nullptr, comparison_arith_shares, nullptr, outArr, nullptr);
+    
+//     delete[] comparison_arith_shares;
+// }
+
+
+
+
 void SecureReLU(int32_t size, 
                 const GroupElement* inArr, 
-                GroupElement* outArr,int scale)
+                GroupElement* outArr, int scale)
 {
-    int world_size = 2;
-    // === Dealer 逻辑 ===
     if (party == DEALER) {
-        // Dealer 需要为所有底层的协议生成密钥
-        // 1. A2B 内部的 SecureAdd -> SecureAND
-        GroupElement dummy_input1[size];
-        GroupElement dummy_input2[size];
-        GroupElement dummy_output[size];
+        // Dealer 端的逻辑保持原样，它只负责生成 Key
+        GroupElement dummy_input1[size], dummy_input2[size], dummy_output[size];
         uint8_t* dummy_int1 = new uint8_t[size];
-        A2B(size,dummy_input1,dummy_input2);
-        // 2. B2A
+        A2B(size, dummy_input1, dummy_input2);
         B2A_Crypten(size, dummy_int1, dummy_input2);
-        
-        // 3. ElemWiseMul
         ElemWiseMul(size, dummy_input1, dummy_input1, dummy_input2, dummy_input2, dummy_output, dummy_output);
-        
+        delete[] dummy_int1;
         return;
     }
 
-    // === 计算方逻辑 ===
+    // --- 调试点 0: 原始输入 [x] ---
+    // 确认进入函数的算术份额是否正确
+    // debug_reconstruct_and_print("ReLU Step 0: Input [x]", size, inArr, scale, false);
 
-    // --- 步骤 1: 将算术份额 [x] 转换为二进制份额 <x> ---
+    // --- 步骤 1: A2B ---
     GroupElement* x_binary_shares = new GroupElement[size];
-    // 这里需要一个 A2B 的实现，它内部会调用 SecureAdd 和 SecureAND
-    // 我们假设 A2B_Protocol 封装了这个逻辑
     A2B(size, inArr, x_binary_shares);
     
-    // --- 步骤 2: 提取符号位 <msb> 并计算比较结果 <res> = NOT <msb> ---
-    uint8_t* comparison_bit_shares = new uint8_t[size]; // B2A_Crypten 需要 uint8_t
-    
+    // --- 调试点 1: 二进制份额 <x> ---
+    // 注意：A2B 出来的是 XOR 份额，必须用异或重构检查
+    // debug_reconstruct_and_print("ReLU Step 1: Binary <x>", size, x_binary_shares, scale, true);
+
+    // --- 步骤 2: 提取 MSB 并取反 ---
+    uint8_t* comparison_bit_shares = new uint8_t[size];
     #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
-        // a. 提取 MSB (本地右移)
+        // 提取第 63 位 (符号位)
         uint8_t msb_share = (x_binary_shares[i] >> (FSSConfig::bitlength - 1)) & 1;
         
-        // b. 计算 [x > 0] = NOT [msb]
-        //    NOT(a) = 1 ^ a. 只在一方执行异或1的操作。
+        // 计算 x > 0 的布尔结果：res = NOT(msb)
+        // 在 MPC 中，NOT(msb) 等同于其中一方执行 1 ^ msb
         if (party == SERVER) {
             comparison_bit_shares[i] = 1 ^ msb_share;
         } else {
             comparison_bit_shares[i] = msb_share;
         }
     }
+
+    // --- 调试点 2: 比较比特 <res> ---
+    // 此时结果应该是：x >= 0 则为 1，x < 0 则为 0
+    // debug_reconstruct_and_print_bool("ReLU Step 2: Comparison Bit <res>", size, comparison_bit_shares);
+
     delete[] x_binary_shares;
 
-    // --- 步骤 3: 将比较结果的布尔份额 <res> 转换为算术份额 [res] ---
+    // --- 步骤 3: B2A ---
     GroupElement* comparison_arith_shares = new GroupElement[size];
     B2A_Crypten(size, comparison_bit_shares, comparison_arith_shares);
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i) {
+        comparison_arith_shares[i] <<= 16; 
+    }
+    // --- 调试点 3: 算术化掩码 [res] ---
+    // 此时 0/1 比特变成了算术域的 0 或 1 (注意：此时通常还不带 scale)
+    debug_reconstruct_and_print("ReLU Step 0: Input [x]", size, inArr, 16, false);
+    debug_reconstruct_and_print("ReLU Step 3: Arith Mask [res]", size, comparison_arith_shares, 16, false);
+
     delete[] comparison_bit_shares;
-    
-    // --- 步骤 4: 计算最终结果 [y] = [x] * [res] ---
+
+    // --- 步骤 4: 最终乘法 [y] = [x] * [res] ---
     ElemWiseMul(size, inArr, nullptr, comparison_arith_shares, nullptr, outArr, nullptr);
     
+    // --- 调试点 4: 最终结果 [y] ---
+    debug_reconstruct_and_print("ReLU Step 4: Final Output [ReLU(x)]", size, outArr, scale, false);
+
     delete[] comparison_arith_shares;
 }
 
-
-
-GroupElement double_to_fixed(double val, int scale) {
-    return static_cast<GroupElement>(round(val * (1LL << scale)));
-}
-
-// 将定点数 GroupElement 转换回 double
-double fixed_to_double(GroupElement val, int scale) {
-    // 处理负数 (补码)
-    int bitlength = FSSConfig::bitlength;
-    if (val & (1ULL << (bitlength - 1))) {
-        int64_t signed_val = val - (1ULL << bitlength);
-        return static_cast<double>(signed_val) / (1LL << scale);
-    }
-    return static_cast<double>(val) / (1LL << scale);
-}
 
 inline GroupElement count_local_wrap(GroupElement a, GroupElement b) {
     // 将无符号的 GroupElement 转换为有符号的 int64_t 来进行判断
