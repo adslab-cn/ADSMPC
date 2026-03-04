@@ -4644,3 +4644,264 @@ void SoftmaxBumbleBee(int32_t size,
     delete[] x_prime_shares;
     delete[] exp_shares;
 }
+
+
+/**
+ * @brief CrypTen 风格的 Exp 实现：(1 + x/2^k)^(2^k)
+ * @param iterations 对应 CrypTen 的 exp_iterations，通常取 8 或 larger
+ */
+void SecureExpLimit(int32_t size, 
+                    MASK_PAIR(GroupElement *inArr), 
+                    MASK_PAIR(GroupElement *outArr), 
+                    int scale, 
+                    int iterations) 
+{
+    // === Dealer 逻辑 ===
+    if (party == DEALER) {
+        GroupElement* dummy = new GroupElement[size];
+        // 1. 生成 ARS 密钥 (用于 x >> iterations)
+        ARS_CrypTen_Style(size, dummy, dummy, iterations);
+        
+        // 2. 生成 k 次平方的密钥
+        for(int i=0; i<iterations; ++i) {
+            // Square: y = y * y
+            SecureSquare(size, dummy, dummy, dummy, dummy);
+            // Truncate: 右移 scale 位以保持定点数格式
+            ARS_CrypTen_Style(size, dummy, dummy, scale);
+        }
+        delete[] dummy;
+        return;
+    }
+
+    // === 计算方逻辑 ===
+    
+    // 1. 计算 base = 1 + (x >> iterations)
+    // 注意：CrypTen 是 1 + x / 2^k。
+    // 首先右移 k 位 (相当于除以 2^k)
+    GroupElement* base = new GroupElement[size];
+    ARS_CrypTen_Style(size, inArr, base, iterations);
+
+    // 加上常数 1 (在定点数中是 1 << scale)
+    GroupElement one_fixed = (1LL << scale);
+    #pragma omp parallel for
+    for(int i=0; i<size; ++i) {
+        if(party == SERVER) {
+            base[i] += one_fixed; 
+        }
+    }
+
+    // 2. 重复平方 k 次 (Repeated Squaring)
+    GroupElement* curr = base;
+    GroupElement* next = new GroupElement[size];
+
+    for(int i=0; i<iterations; ++i) {
+        // next = curr * curr
+        SecureSquare(size, curr, nullptr, next, nullptr);
+        
+        // 截断回 scale
+        ARS_CrypTen_Style(size, next, next, scale);
+        
+        // 交换指针准备下一轮
+        std::swap(curr, next);
+    }
+
+    // 3. 输出结果
+    memcpy(outArr, curr, size * sizeof(GroupElement));
+
+    if(curr != base) delete[] curr;
+    if(next != base) delete[] next;
+    else delete[] next;
+}
+
+/**
+ * @brief CrypTen 风格的隐私倒数 (1/x)，使用 Newton-Raphson 迭代
+ * @param size 向量大小
+ * @param inArr 输入 x (MASK_PAIR)
+ * @param outArr 输出 1/x (MASK_PAIR)
+ * @param scale 定点数精度 (如 16)
+ * @param iters 迭代次数 (CrypTen 默认通常是 5)
+ */
+void SecureReciprocal(int32_t size, 
+                      MASK_PAIR(GroupElement *inArr), 
+                      MASK_PAIR(GroupElement *outArr), 
+                      int scale, 
+                      int iters = 5) 
+{
+    // === Dealer 逻辑 ===
+    if (party == DEALER) {
+        // Dealer 需要为 Exp 和每次迭代的乘法生成密钥
+        // 1. Initial Guess 需要 Exp: 3 * exp(1-2x)
+        //    Exp 内部需要 ARS 和 Square 密钥
+        //    我们假设 SecureExpLimit 已经适配了 dealer 逻辑，或者这里生成足够的 dummy 密钥
+        GroupElement* dummy = new GroupElement[size];
+        
+        // 生成 Exp 密钥 (假设 exp_iters=8)
+        SecureExpLimit(size, dummy, dummy, dummy, dummy, scale, 8); 
+
+        // 2. 迭代逻辑: y_new = y * (2 - x * y)
+        //    每次迭代包含两次乘法: (x * y) 和 (y * temp)
+        for(int k=0; k<iters; ++k) {
+            // Mul 1: x * y
+            ElemWiseMul(size, dummy, dummy, dummy, dummy, dummy, dummy);
+            
+            // Mul 2: y * (2 - xy)
+            ElemWiseMul(size, dummy, dummy, dummy, dummy, dummy, dummy);
+        }
+
+        delete[] dummy;
+        return;
+    }
+
+    // === 计算方逻辑 ===
+    
+    // --- Step 1: 计算初始猜测 y0 = 3 * exp(1 - 2x) + 0.003 ---
+    
+    // 1.1 计算 exponent = 1 - 2x
+    GroupElement* exponent = new GroupElement[size];
+    GroupElement fixed_1 = (1LL << scale);       // 1.0
+    GroupElement fixed_2 = (2LL << scale);       // 2.0 (用于乘法系数时其实直接用整数2乘即可)
+    
+    #pragma omp parallel for
+    for(int i=0; i<size; ++i) {
+        // 本地计算: 1 - 2*x
+        // 注意：inArr[i] 是定点数，乘以整数 2 依然是定点数，不需要右移
+        if (party == SERVER) {
+            exponent[i] = fixed_1 - 2 * inArr[i]; 
+        } else {
+            exponent[i] = -2 * inArr[i];
+        }
+    }
+
+    // 1.2 计算 exp(exponent)
+    GroupElement* exp_val = new GroupElement[size];
+    // 调用上一轮实现的 SecureExpLimit
+    SecureExpLimit(size, exponent, nullptr, exp_val, nullptr, scale, 8);
+
+    // 1.3 计算 y0 = 3 * exp + 0.003
+    GroupElement* y_curr = new GroupElement[size];
+    GroupElement fixed_3 = (3LL << scale);               // 3.0
+    GroupElement fixed_0_003 = double_to_fixed(0.003, scale); // 0.003
+    
+    #pragma omp parallel for
+    for(int i=0; i<size; ++i) {
+        // 3 * exp (本地乘法，scale 不变)
+        y_curr[i] = 3 * exp_val[i]; 
+        if (party == SERVER) {
+            y_curr[i] += fixed_0_003;
+        }
+    }
+
+    // --- Step 2: Newton-Raphson 迭代 ---
+    // y_{k+1} = y_k * (2 - x * y_k)
+    
+    GroupElement* xy_prod = new GroupElement[size];
+    GroupElement* term2   = new GroupElement[size]; // (2 - xy)
+    GroupElement* y_next  = new GroupElement[size];
+
+    for(int k=0; k<iters; ++k) {
+        // 2.1: 计算 x * y_k
+        ElemWiseMul(size, inArr, nullptr, y_curr, nullptr, xy_prod, nullptr);
+
+        // 2.2: 计算 (2 - x * y_k)
+        #pragma omp parallel for
+        for(int i=0; i<size; ++i) {
+            if (party == SERVER) {
+                term2[i] = fixed_2 - xy_prod[i];
+            } else {
+                term2[i] = -xy_prod[i];
+            }
+        }
+
+        // 2.3: 计算 y_k * term2
+        ElemWiseMul(size, y_curr, nullptr, term2, nullptr, y_next, nullptr);
+
+        // 更新 y_curr
+        memcpy(y_curr, y_next, size * sizeof(GroupElement));
+    }
+
+    // --- Step 3: 输出 ---
+    memcpy(outArr, y_curr, size * sizeof(GroupElement));
+
+    // 清理内存
+    delete[] exponent;
+    delete[] exp_val;
+    delete[] y_curr;
+    delete[] xy_prod;
+    delete[] term2;
+    delete[] y_next;
+}
+
+
+void SoftmaxCrypTenStyle(int32_t size, 
+                         MASK_PAIR(GroupElement *inArr), 
+                         MASK_PAIR(GroupElement *outArr), 
+                         int scale)
+{
+    // === Dealer 逻辑 (占位) ===
+    if (party == DEALER) {
+        GroupElement* dummy = new GroupElement[size];
+        GroupElement* dummy_single = new GroupElement[1];
+        
+        // 1. Max
+        SlothMaxpool(1, size, bitlength, dummy, dummy_single, "Softmax::Max");
+        // 2. Exp
+        SecureExpLimit(size, dummy, dummy, dummy, dummy, scale, 8);
+        // 3. Reciprocal (针对 sum)
+        // 注意：sum 是标量(size=1)，我们对标量做倒数
+        SecureReciprocal(1, dummy_single, dummy, dummy_single, dummy, scale, 5);
+        // 4. Mul (广播乘法)
+        ElemWiseMul(size, dummy, dummy, dummy, dummy, dummy, dummy);
+
+        delete[] dummy;
+        delete[] dummy_single;
+        return;
+    }
+
+    // === 计算方逻辑 ===
+    
+    // 1. Find Max
+    GroupElement* max_val = new GroupElement[1];
+    SlothMaxpool(1, size, bitlength, inArr, max_val, "Softmax::Max");
+
+    // 2. Shift: x' = x - max
+    GroupElement* x_shifted = new GroupElement[size];
+    #pragma omp parallel for
+    for(int i=0; i<size; ++i) {
+        x_shifted[i] = inArr[i] - max_val[0];
+    }
+
+    // 3. Exp: e^x'
+    GroupElement* exp_val = new GroupElement[size];
+    SecureExpLimit(size, x_shifted, nullptr, exp_val, nullptr, scale, 8);
+
+    // 4. Sum
+    GroupElement* sum_exp = new GroupElement[1];
+    sum_exp[0] = 0;
+    for(int i=0; i<size; ++i) {
+        sum_exp[0] += exp_val[i];
+    }
+    
+    // 5. Secure Reciprocal: inv_sum = 1 / sum
+    // 这里调用我们刚写的 SecureReciprocal
+    GroupElement* inv_sum = new GroupElement[1];
+    SecureReciprocal(1, sum_exp, nullptr, inv_sum, nullptr, scale, 5);
+
+    // 6. Broadcast Multiply: out = exp * inv_sum
+    // 需要把 inv_sum[0] 广播成向量
+    GroupElement* inv_sum_vec = new GroupElement[size];
+    #pragma omp parallel for
+    for(int i=0; i<size; ++i) {
+        inv_sum_vec[i] = inv_sum[0];
+    }
+
+    // 7. 乘法 + 截断
+    ElemWiseMul(size, exp_val, nullptr, inv_sum_vec, nullptr, outArr, nullptr);
+
+    // 清理
+    delete[] max_val;
+    delete[] x_shifted;
+    delete[] exp_val;
+    delete[] sum_exp;
+    delete[] inv_sum;
+    delete[] inv_sum_vec;
+}

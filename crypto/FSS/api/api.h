@@ -169,3 +169,9 @@ void SecretShare_Bool(int32_t size, const GroupElement* plain_in, GroupElement* 
 void A2B(int size, const GroupElement* arithmetic_shares, GroupElement* binary_shares);
 
 void SecureReLU(int32_t size, const GroupElement* inArr, GroupElement* outArr,int scale);
+
+
+void SoftmaxCrypTenStyle(int32_t size, 
+                         MASK_PAIR(GroupElement *inArr), 
+                         MASK_PAIR(GroupElement *outArr), 
+                         int scale);

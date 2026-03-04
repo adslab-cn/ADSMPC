@@ -5,13 +5,13 @@
 #include <cassert>
 #include <algorithm>
 #include <random>
-#include <iomanip> // 为了 std::fixed 和 std::setprecision
+#include <iomanip>
 
-// 包含您的MPC框架的核心头文件
+// 包含你的 MPC 框架核心头文件
 #include "../../nn/backend/FSS_extended.h"
 #include "../../crypto/FSS/api/api.h"
 
-// --- 辅助函数 (与您提供的文件相同) ---
+// --- 辅助函数 ---
 std::vector<double> generate_random_double_array(size_t size, double min_val, double max_val) {
     std::vector<double> data;
     data.reserve(size);
@@ -26,7 +26,7 @@ std::vector<double> generate_random_double_array(size_t size, double min_val, do
 
 void print_double_array(const std::string& title, const std::vector<double>& arr, int limit = 10) {
     std::cout << "\n--- " << title << " ---" << std::endl;
-    std::cout << std::fixed << std::setprecision(8); // 设置输出精度
+    std::cout << std::fixed << std::setprecision(8); 
     for (size_t i = 0; i < arr.size() && i < limit; ++i) {
         std::cout << "  [" << i << "]: " << arr[i] << std::endl;
     }
@@ -35,29 +35,37 @@ void print_double_array(const std::string& title, const std::vector<double>& arr
     }
 }
 
-
 // =========================================================================
 // == 明文参考实现: 标准精确 SOFTMAX (Ground Truth)
 // =========================================================================
-void plaintext_relu_precise(const std::vector<double>& input, std::vector<double>& output) {
+void plaintext_softmax_precise(const std::vector<double>& input, std::vector<double>& output) {
     if (input.empty()) return;
     output.resize(input.size());
-    std::transform(input.begin(), input.end(), output.begin(),
-                   [](double v) { return std::max(0.0, v); });
-    //output = input;
+
+    // 1. 找最大值 (数值稳定性)
+    double max_val = input[0];
+    for (double val : input) {
+        if (val > max_val) max_val = val;
+    }
+
+    // 2. 计算 exp(x - max) 并求和
+    double sum_exp = 0.0;
+    for (size_t i = 0; i < input.size(); ++i) {
+        output[i] = std::exp(input[i] - max_val);
+        sum_exp += output[i];
+    }
+
+    // 3. 归一化 (除以和)
+    for (size_t i = 0; i < input.size(); ++i) {
+        output[i] /= sum_exp;
+    }
 }
-// void plaintext_relu_precise(const std::vector<double>& input, std::vector<double>& output) {
-//     if (input.empty()) return;
-//     output.resize(input.size());
-//     std::transform(input.begin(), input.end(), output.begin(),
-//     { return std::max(0.0, v); });
-// }
+
 // --- 主测试函数 ---
+void test_softmax_crypten(int party) {
+    std::cout << "\n\n>> CrypTen-Style Softmax Protocol Test - Start" << std::endl;
 
-void test_relu_crypten(int party) {
-    std::cout << "\n\n>> crypten relu Protocol Test - Start" << std::endl;
-
-    // --- 1. 初始化MPC环境 ---
+    // --- 1. 初始化 MPC 环境 ---
     using FSSVersion = FSSExtended<u64>;
     FSSVersion *FSS = new FSSVersion();
     FSSConfig::bitlength = 64;
@@ -67,29 +75,28 @@ void test_relu_crypten(int party) {
     FSS->init(ip, true);
 
     // --- 2. 准备数据 ---
-    const int size = 1024;  
+    // Softmax 注意事项：输入范围不宜过大，否则定点数 exp 容易溢出或精度丢失
+    // 建议测试范围 [-3.0, 3.0] 或 [-5.0, 5.0]
+    const int size = 8;  
     const int scale = 16;       
     
     std::vector<double> plain_input_double;
     std::vector<GroupElement> plain_input_fixed(size);
 
     if (party == SERVER) {
-        plain_input_double = generate_random_double_array(size, -8.0, 8.0);
+        plain_input_double = generate_random_double_array(size, -3.0, 3.0);
         for (int i = 0; i < size; ++i) {
             plain_input_fixed[i] = double_to_fixed(plain_input_double[i], scale);
         }
+        print_double_array("Input Data (First 10)", plain_input_double, 10);
     }
 
     // --- 3. 计算期望结果 (Server) ---
     std::vector<double> output_precise(size);
-    std::vector<double> output_logic(size);
 
     if (party == SERVER) {
-        // A. 计算标准精确值
-        plaintext_relu_precise(plain_input_double, output_precise);
-
-        // 打印输入
-        print_double_array("Input Data", plain_input_double, 5);
+        plaintext_softmax_precise(plain_input_double, output_precise);
+        // print_double_array("Expected Softmax Output", output_precise, 5);
     }
 
     // --- 4. 秘密分享 ---
@@ -98,24 +105,28 @@ void test_relu_crypten(int party) {
         SecretShare(size, plain_input_fixed.data(), input_shares, SERVER);
     }
 
-    // --- 5. 执行MPC协议 ---
+    // --- 5. 执行 MPC 协议 ---
     GroupElement* output_shares = new GroupElement[size]();
-    GroupElement* in_mask = new GroupElement[size]();
+    GroupElement* in_mask = new GroupElement[size](); // 如果 api 需要 mask 数组
     GroupElement* out_mask = new GroupElement[size]();
     
     std::cout << "\n   Party " << party << ": Starting secure computation..." << std::endl;
     FSS::start();
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    SecureReLU(size, input_shares, output_shares, scale);
-    // 你的核心调用
-    // SoftmaxBumbleBee(size, input_shares, in_mask, output_shares, out_mask, scale);
+    // ==========================================================
+    // 调用我们刚才实现的 CrypTen 风格 Softmax
+    // 注意：Mask 参数根据你的 MASK_PAIR 宏定义传入
+    // 这里的 input_shares 对应 MASK_PAIR 的第一项，in_mask 对应第二项
+    // ==========================================================
+    SoftmaxCrypTenStyle(size, input_shares, in_mask, output_shares, out_mask, scale);
     
     auto end_time = std::chrono::high_resolution_clock::now();
     FSS::end();
     std::cout<<"   Party " << party << ": Secure computation finished in "
         << std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count()
         << " ms." << std::endl;
+
     // --- 6. 重构与验证 ---
     if(party != DEALER){
         std::cout << "\n   Party " << party << ": Reconstructing..." << std::endl;
@@ -124,49 +135,50 @@ void test_relu_crypten(int party) {
     
     if (party == SERVER) {
         std::vector<double> output_mpc(size);
+        double sum_check = 0.0;
         for (int i = 0; i < size; ++i) {
             output_mpc[i] = fixed_to_double(output_shares[i], scale);
+            sum_check += output_mpc[i];
         }
+
+        std::cout << "\n   [Check] Sum of MPC Softmax Output: " << sum_check << " (Should be close to 1.0)" << std::endl;
 
         // --- 详细对比分析 ---
         std::cout << "\n================ COMPARISON REPORT ================" << std::endl;
         std::cout << std::setw(6) << "Idx" 
                   << std::setw(15) << "Precise" 
-                  << std::setw(15) << "BB_Logic" 
                   << std::setw(15) << "MPC_Result" 
-                  << std::setw(15) << "Alg_Err"   // |Precise - BB_Logic|
-                  << std::setw(15) << "MPC_Err"   // |BB_Logic - MPC|
+                  << std::setw(15) << "Error"   // |Precise - MPC|
                   << std::endl;
-        std::cout << "---------------------------------------------------------------------------------" << std::endl;
+        std::cout << "-------------------------------------------------------" << std::endl;
 
-        double max_alg_error = 0.0;
-        double max_mpc_error = 0.0;
-        double max_total_error = 0.0;
+        double max_error = 0.0;
+        double total_error = 0.0;
 
         for (int i = 0; i < size; ++i) {
-            double alg_err = std::abs(output_precise[i] - output_logic[i]);
-            double mpc_err = std::abs(output_logic[i] - output_mpc[i]);
-            double total_err = std::abs(output_precise[i] - output_mpc[i]);
+            double err = std::abs(output_precise[i] - output_mpc[i]);
+            max_error = std::max(max_error, err);
+            total_error += err;
 
-            max_alg_error = std::max(max_alg_error, alg_err);
-            max_mpc_error = std::max(max_mpc_error, mpc_err);
-            max_total_error = std::max(max_total_error, total_err);
-
-            if (i < 10) { // 只打印前10行详细数据
+            if (i < 15) { // 打印前 15 行
                 std::cout << std::setw(6) << i 
                           << std::setw(15) << output_precise[i] 
-                          << std::setw(15) << output_logic[i] 
                           << std::setw(15) << output_mpc[i] 
-                          << std::setw(15) << alg_err 
-                          << std::setw(15) << mpc_err 
+                          << std::setw(15) << err 
                           << std::endl;
             }
         }
         std::cout << "..." << std::endl;
-        std::cout << "---------------------------------------------------------------------------------" << std::endl;
-        std::cout << "Max Algorithm Error (Logic vs Precise): " << std::fixed << std::setprecision(8) << max_alg_error << std::endl;
-        std::cout << "Max MPC Impl Error  (MPC vs Logic)    : " << std::fixed << std::setprecision(8) << max_mpc_error << std::endl;
-        std::cout << "Max Total Error     (MPC vs Precise)  : " << std::fixed << std::setprecision(8) << max_total_error << std::endl;
+        std::cout << "-------------------------------------------------------" << std::endl;
+        std::cout << "Max Error: " << std::fixed << std::setprecision(8) << max_error << std::endl;
+        std::cout << "Avg Error: " << std::fixed << std::setprecision(8) << (total_error / size) << std::endl;
+        
+        // 简单的 Pass/Fail 判断 (阈值取决于 scale 和迭代次数，scale=16 时 1e-3 到 1e-4 是合理的)
+        if (max_error < 1e-2) { 
+            std::cout << "\n[SUCCESS] Protocol implementation looks correct!" << std::endl;
+        } else {
+            std::cout << "\n[WARNING] Error might be too high. Check scale or iterations." << std::endl;
+        }
         std::cout << "===================================================" << std::endl;
     }
 
@@ -178,10 +190,10 @@ void test_relu_crypten(int party) {
     FSS->finalize();
     delete FSS;
 
-    std::cout << ">> BumbleBee Softmax Protocol Test - End\n" << std::endl;
+    std::cout << ">> CrypTen-Style Softmax Test - End\n" << std::endl;
 }
 
-// --- main函数 (与您提供的文件相同) ---
+// --- main 函数 ---
 int main(int argc, char** argv) {
     int party = 0;
     if (argc > 1) {
@@ -195,7 +207,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    test_relu_crypten(party);
+    test_softmax_crypten(party);
 
     return 0;
 }

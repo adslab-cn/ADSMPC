@@ -152,3 +152,9 @@ add_executable(common_test
     tests/bench/common_test.cpp
 )
 target_link_libraries (common_test ${PROJECT_NAME})
+
+
+add_executable(crypten_softmax_test
+    tests/bench/crypten_softmax_test.cpp
+)
+target_link_libraries (crypten_softmax_test ${PROJECT_NAME})
