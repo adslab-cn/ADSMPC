@@ -323,6 +323,38 @@ public:
     }
 };
 
+// =========================================================================
+// GTDCF KeyPack
+// =========================================================================
+struct GTDCFKeyPack {
+    int bin, w, d, groupSize;
+    osuCrypto::block seed;       
+    osuCrypto::block *scw;       
+    uint8_t *tcw;                
+    GroupElement *vcw;           
+    GroupElement *leaf_vcw;      
+    GroupElement rout_share; // 输出的掩码份额
+
+    GTDCFKeyPack(int bin, int w, int groupSize = 2) 
+        : bin(bin), w(w), groupSize(groupSize) {
+        d = bin - w;
+        int B = 1 << w; 
+        scw = new osuCrypto::block[d];
+        tcw = new uint8_t[2 * d];
+        vcw = new GroupElement[d * groupSize];
+        leaf_vcw = new GroupElement[B * groupSize];
+        rout_share = 0;
+    }
+
+    GTDCFKeyPack() {
+        bin = w = d = groupSize = 0;
+        scw = nullptr; tcw = nullptr; vcw = nullptr; leaf_vcw = nullptr;
+        rout_share = 0;
+    }
+};
+
+
+
 struct PubCmpKeyPack {
     int bin;
     DCFKeyPack dcfKey;
@@ -400,76 +432,6 @@ struct SlothSignExtendKeyPack {
     int bin, bout;
     GroupElement rout;
     GroupElement select;
-};
-
-
-// FastSecNetReLU
-struct FastSecNetReluKeyPack
-{
-    int Bin, Bout;
-    DCFKeyPack dcfKey;
-    GroupElement r;
-    GroupElement b0, b1;
-    GroupElement rout;
-};
-
-// 新的Drelu计算方案
-struct NewDreluKeyPack {
-    int bin;
-    DPFETKeyPack dpfKey;
-    GroupElement r;
-};
-
-
-// OblivReLU: 需要比较(DCF)和乘法(Mult)
-struct OblivReLUKeyPack {
-    int Bin, Bout;
-    DPFETKeyPack dpfKey; 
-    MultKey multKey;     
-    GroupElement r_cmp;  
-    GroupElement r_out; 
-};
-
-// OblivSoftmax: 包含多个ReLU key, 倒数Key(Taylor), 选择Key(Select), 乘法Key(Mult)
-struct OblivSoftmaxKeyPack {
-    int s1, s2; // batch, classes
-    int Bin, Bout;
-    // 每一个元素都需要做ReLU
-    OblivReLUKeyPack* reluKeys; // size: s1 * s2
-    
-    // 对每一行的和做倒数 (Batch size s1)
-    TaylorKeyPack* inverseKeys; // size: s1
-    
-    // 判断和是否大于0 (Batch size s1)
-    DCFKeyPack* sumCheckKeys;   // size: s1
-    GroupElement* r_sumCheck;   // size: s1
-    
-    // 选择逻辑 (sum > 0 ? inv : 1/L)
-    SelectKeyPack* selectKeys;  // size: s1
-    
-    // 最后元素级乘法 (y * inv)
-    MultKey* finalMultKeys;     // size: s1 * s2
-    
-    // 构造函数初始化指针
-    OblivSoftmaxKeyPack() : reluKeys(nullptr), inverseKeys(nullptr), sumCheckKeys(nullptr), 
-                            r_sumCheck(nullptr), selectKeys(nullptr), finalMultKeys(nullptr) {}
-};
-
-
-
-
-// Shuffle 协议密钥
-struct ShuffleKeyPack {
-    int size;
-};
-
-// Graphiti 协议整体密钥包
-struct GraphitiKeyPack {
-    int N;             // DAG-list 总长度 (|V| + |E|)
-    int numNodes;      // 节点数量
-    ShuffleKeyPack vToS; // Vertex Order -> Source Order
-    ShuffleKeyPack sToD; // Source Order -> Destination Order
-    ShuffleKeyPack dToV; // Destination Order -> Vertex Order
 };
 
 

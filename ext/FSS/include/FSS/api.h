@@ -156,28 +156,62 @@ void SlothFaithfulARS(int size, int bin, GroupElement *x, GroupElement *y, int s
 void reconstruct(int32_t size, GroupElement *arr, int bw);
 
 
-/* FastSecNetRelu */
-void FastSecNetRelu(int32_t size, GroupElement *rin, GroupElement *input, GroupElement *rout, std::string prefix = "");
+// ==========================================
+// GTDCF-based ReLU API
+// ==========================================
+void GTDCFReLU(int32_t size, GroupElement *inArr, GroupElement *outArr, GroupElement *inArr_mask, GroupElement *outArr_mask, int suffix_w = 8, std::string prefix = "");
 
-/* 优化的SIGMA relu */
-void NewDrelu(int size, int bin, GroupElement *x, GroupElement *y, std::string prefix = "");
-void NewRelu(int size, int bin, GroupElement *x, GroupElement *y, std::string prefix = "");
 
 // ==========================================
-// OblivGNN Protocols API
+// Optimized Softmax API (using GT-ReLU & Scaling-Squaring)
 // ==========================================
-
-// ADD THIS FUNCTION DECLARATION
-void GCNConv(int N, int C_in, int C_out,
-             MASK_PAIR(GroupElement *A_hat),
-             MASK_PAIR(GroupElement *F_in),
-             MASK_PAIR(GroupElement *W),
-             MASK_PAIR(GroupElement *F_out));
+void BPGCNSoftmax(int32_t s1, int32_t s2, 
+                  GroupElement *inArr, GroupElement *outArr, 
+                  GroupElement *inArr_mask, GroupElement *outArr_mask, 
+                  int32_t scale, std::string prefix = "");
 
 
+// ==========================================
+// Hybrid Graph Message Passing API
+// ==========================================
+void BPMPL(int numBaseNodes, int numBaseEdges,
+           int numDeltaNodes, int numDeltaEdges,
+           int numGhostNodes,
+           int inDim, int outDim,
+           MASK_PAIR(GroupElement *F_in),
+           MASK_PAIR(GroupElement *W),
+           MASK_PAIR(GroupElement *D_inv),
+           MASK_PAIR(GroupElement *F_out),
+           int *ghostIndices_mask,
+           std::string prefix = "");
 
-// --- Graphiti GCN 协议接口 ---
-void GraphitiGCNConv(int32_t numNodes, int32_t numEdges, int32_t inDim, int32_t outDim,
-                    MASK_PAIR(GroupElement *F), 
-                    MASK_PAIR(GroupElement *W), 
-                    MASK_PAIR(GroupElement *outF));
+void BPMPL_GraphRouting(int numBaseNodes, int numBaseEdges,
+           int numDeltaNodes, int numDeltaEdges,
+           int numGhostNodes,
+           int outDim,
+           MASK_PAIR(GroupElement *H_trans), // 直接接收已经降维好的特征
+           MASK_PAIR(GroupElement *D_inv),
+           MASK_PAIR(GroupElement *F_out),
+           int *ghostIndices_mask,
+           std::string prefix = "");
+
+
+
+// ==========================================
+// OblivGNN Protocol API
+// ==========================================
+void OblivGNN_MatrixUpdate(int N, int C, int numUpdates,
+                           MASK_PAIR(GroupElement *Matrix),
+                           int *target_rows_mask,
+                           MASK_PAIR(GroupElement *Delta),
+                           std::string prefix = "");
+
+
+// ==========================================
+// OblivGNN Protocol API
+// ==========================================
+void OblivGNN_MatrixUpdate_FD(int N, int C, int numUpdates,
+                           MASK_PAIR(GroupElement *Matrix),
+                           int *target_rows_mask,
+                           MASK_PAIR(GroupElement *Delta),
+                           std::string prefix = "");

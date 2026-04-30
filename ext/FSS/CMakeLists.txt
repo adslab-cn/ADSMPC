@@ -33,7 +33,6 @@ add_library(${PROJECT_NAME}
     mic.cpp
     msnzb.cpp
     truncate.cpp
-    graphiti.cpp
 )
 
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads cryptoTools bitpack)

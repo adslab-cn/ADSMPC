@@ -1,75 +1,24 @@
-## Introduction
-本项目是ADSLab整理和构建的MPC训练和推理框架
+# Sytorch
 
-## Architecture
-This repository has the following components:
-- **crypto**
-计算库核心部分
-    - FSS
-    函数秘密分享（Function Secret Share）的代码实现
-        - primitives
-        密码原语部分，包括DCF，更多FSS原语待添加，如DPF, DIF等
-        - protocol
-        方法协议部分，以FSS为基础实现的协议
-        - aux_parameter
-        辅助操作，包括密钥定义等
-        - api
-        协议评估以及与neural_networks之间的接口，方便网络对FSS后端进行调用（未来看情况可能会作为公共操作放在外面）
-    - ASS
-    加性秘密分享，待添加
+Sytorch is a frontend (like pytorch) for secure machine-learning which can support multiple crypto-backends. Currently it supports inference tasks and includes LLAMA and Cleartext (no crypto) as backends. Sytorch allows users to describe machine learning models in C++ using a pytorch like API. It also supports conversion of ONNX models into sytorch using OnnxBridge.
 
-- **neural_networks**
-上层神经网络的训练和推理结构，调用底层
-
-
-- **dataset**
-用于存放隐私保护神经网络推理的明文模型结构代码，以及应用所需的相关数据也可放在该文件夹下
-
-
-- **tests**
-本项目的测试代码
-
-
-## SetUp
-项目本体使用以下指令即可安装
-
-可选参数: quick: 直接使用默认安装
-
+## Dependencies
+Sytorch requires Eigen3, cmake and a C++ compiler with OpenMP enabled. 
 ```bash
-sudo ./1-base.sh quick
+sudo apt update
+sudo apt install libeigen3-dev cmake build-essential git
+```
+To use Sytorch with OnnxBridge, OnnxBridge's python depenedencies need to be installed using the [requirements.txt](OnnxBridge/requirements.txt) file using the command:
+```bash
+pip3 install -r OnnxBridge/requirements.txt
 ```
 
-# Running Tests & Networks
+## Quick start using OnnxBridge
 
-**编译**
-```bash
-mkdir build && cd build
-cmake ..
-make
-```
+Given an model onnx file, OnnxBridge can be used to generate an executable which can be run on two VMs, server and client (owning the model weights and input image respectively), to get the secure inference output. 
 
-编译完成后，将dataset文件夹中需要的数据集复制到创建的build文件夹中
+To do this two scripts are available:
+1. [Single Inference](/sytorch/Toy%20example-%20single%20inference.md) - This script is ideal for a single inference scenario.
+2. [Multiple Inference](/sytorch/Toy%20example-%20multiple%20inference.md) - This script is ideal for multiple inference usecases.
 
-**运行**
 
-如果在本机测试，即tests下代码中ip地址设置为127.0.0.1，使用两个terminal模拟两台服务器
-
-Dealer：
-```bash
-./CNN 1
-```
-
-Server：
-```bash
-./CNN 2
-```
-
-Client：
-```bash
-./CNN 3
-```
-
-**Reference:** 
-
-[EzPC](https://github.com/mpc-msri/EzPC/)  
-[NssMPClib](https://github.com/XidianNSS/NssMPClib)  

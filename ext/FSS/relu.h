@@ -24,16 +24,3 @@ GroupElement evalMaxpoolDouble_2(int party, GroupElement x, GroupElement y, Grou
 std::pair<SlothDreluKeyPack, SlothDreluKeyPack> keyGenSlothDrelu(int bin, GroupElement rin, GroupElement rout);
 GroupElement evalSlothDrelu(int party, GroupElement x, const SlothDreluKeyPack &k);
 
-// FastSecNet
-std::pair<FastSecNetReluKeyPack, FastSecNetReluKeyPack> keyGenFastSecNetRelu(int Bin, int Bout,
-                        GroupElement rin, GroupElement rout);
-
-GroupElement evalFastSecNetRelu1(int party, GroupElement x_, const FastSecNetReluKeyPack &k);
-GroupElement evalFastSecNetRelu2(int party, GroupElement x_shift, const FastSecNetReluKeyPack &k);
-
-// 新的Drelu计算方案
-std::pair<NewDreluKeyPack, NewDreluKeyPack> keyGenNewDrelu(int bin, GroupElement rin, GroupElement rout);
-GroupElement evalNewDrelu(int party, GroupElement x, const NewDreluKeyPack &k);
-
-std::pair<OblivReLUKeyPack, OblivReLUKeyPack> keyGenOblivReLU(int Bin, int Bout, GroupElement rin, GroupElement rout);
-GroupElement evalOblivReLU(int party, GroupElement x, const OblivReLUKeyPack &key);

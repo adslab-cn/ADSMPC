@@ -290,6 +290,19 @@ inline void freeDPFKeyPackPair(std::pair<DPFETKeyPack, DPFETKeyPack> &keys){
     delete[] keys.second.s;
 }
 
+// freeGTDCFKeyPack==============================================================
+inline void freeGTDCFKeyPack(GTDCFKeyPack &key) {
+    if (key.scw) { delete[] key.scw; key.scw = nullptr; }
+    if (key.tcw) { delete[] key.tcw; key.tcw = nullptr; }
+    if (key.vcw) { delete[] key.vcw; key.vcw = nullptr; }
+    if (key.leaf_vcw) { delete[] key.leaf_vcw; key.leaf_vcw = nullptr; }
+}
+
+inline void freeGTDCFKeyPackPair(std::pair<GTDCFKeyPack, GTDCFKeyPack> &keys) {
+    freeGTDCFKeyPack(keys.first);
+    freeGTDCFKeyPack(keys.second);
+}
+
 inline void freeLUTKeyPack(LUTKeyPack &key){
     freeDPFKeyPack(key.dpfKey);
 }
@@ -365,74 +378,3 @@ inline void freeWrapDPFKeyPackPair(std::pair<WrapDPFKeyPack, WrapDPFKeyPack> &ke
     delete[] keys.second.dpfKey.s;
 }
 
-// FastSecNetRelu
-inline void freeFastSecNetReluKeyPack(FastSecNetReluKeyPack &key)
-{
-    freeDCFKeyPack(key.dcfKey);
-}
-
-inline void freeFastSecNetReluKeyPackPair(std::pair<FastSecNetReluKeyPack,FastSecNetReluKeyPack> &keys)
-{
-    delete[] keys.first.dcfKey.k;
-    delete[] keys.second.dcfKey.k;
-    delete[] keys.first.dcfKey.g;
-    delete[] keys.first.dcfKey.v;
-
-}
-
-// NewDrelu
-inline void freeNewDreluKeyPack(NewDreluKeyPack &key){
-    freeDPFKeyPack(key.dpfKey);
-}
-
-inline void freeNewDreluKeyPackPair(std::pair<NewDreluKeyPack, NewDreluKeyPack> &keys){
-    delete[] keys.first.dpfKey.s;
-    delete[] keys.second.dpfKey.s;
-}
-
-
-
-// // OblivGNNReLU
-// inline void freeOblivReLUKeyPack(OblivReLUKeyPack &key) {
-//     freeDCFKeyPack(key.dcfKey);
-//     // MultKey 没有动态分配内存，不需要 free
-// }
-
-// // OblivGNNReLU
-// inline void freeOblivReLUKeyPackPair(std::pair<OblivReLUKeyPack, OblivReLUKeyPack> &keys) {
-//     freeDCFKeyPackPair(std::make_pair(keys.first.dcfKey, keys.second.dcfKey));
-// }
-
-// // OblivSoftmax
-// inline void freeOblivSoftmaxKeyPack(OblivSoftmaxKeyPack &key, int m) {
-//     int size_total = key.s1 * key.s2;
-//     int size_batch = key.s1;
-
-//     if (key.reluKeys) {
-//         for(int i=0; i<size_total; ++i) freeOblivReLUKeyPack(key.reluKeys[i]);
-//         delete[] key.reluKeys;
-//     }
-//     if (key.inverseKeys) {
-//         for(int i=0; i<size_batch; ++i) freeTaylorKeyPack(key.inverseKeys[i], m);
-//         delete[] key.inverseKeys;
-//     }
-//     if (key.sumCheckKeys) {
-//         for(int i=0; i<size_batch; ++i) freeDCFKeyPack(key.sumCheckKeys[i]);
-//         delete[] key.sumCheckKeys;
-//     }
-//     if (key.r_sumCheck) delete[] key.r_sumCheck;
-    
-//     // SelectKeyPack 和 MultKey 没有深层动态内存需要这里递归释放，直接delete数组
-//     if (key.selectKeys) delete[] key.selectKeys;
-//     if (key.finalMultKeys) delete[] key.finalMultKeys;
-// }
-
-
-
-inline void freeShuffleKeyPack(ShuffleKeyPack &key) {} 
-
-inline void freeGraphitiKeyPack(GraphitiKeyPack &key) {
-    freeShuffleKeyPack(key.vToS);
-    freeShuffleKeyPack(key.sToD);
-    freeShuffleKeyPack(key.dToV);
-}

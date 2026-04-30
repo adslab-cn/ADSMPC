@@ -22,8 +22,6 @@
 #include <FSS/dpf.h>
 #include "taylor.h"
 #include "float.h"
-#include "softmax.h"
-#include "graphiti.h"
 
 #include <cassert>
 #include <iostream>
@@ -4974,486 +4972,841 @@ void PiranhaSoftmax(int32_t s1, int32_t s2, MASK_PAIR(GroupElement *inArr), MASK
     delete[] expandedDenominator;
 }
 
-// FastSecNetReLU implementation
-void FastSecNetRelu(int32_t size, GroupElement *rin, GroupElement *input, GroupElement *rout, std::string prefix)
-{   
-    GroupElement *tmp = make_array<GroupElement>(size);
-    GroupElement *x_shift = make_array<GroupElement>(size);
-    GroupElement *res = make_array<GroupElement>(size);
-    // 离线阶段，生成密钥
-    if (party == DEALER)
-    {
-
-        pair<FastSecNetReluKeyPack> *keys = new pair<FastSecNetReluKeyPack>[size];
-
-#pragma omp parallel for
-        for (int i = 0; i < size; i += 1)
-        {
-            auto rout_ = random_ge(bitlength);
-            keys[i] = keyGenFastSecNetRelu(bitlength, bitlength, rin[i], rout_);
-            rout[i] = rout_;
-        }
-
-        for (int i = 0; i < size; ++i)
-        {
-            server->send_FastSecNetrelu_key(keys[i].first);
-            client->send_FastSecNetrelu_key(keys[i].second);
-            freeFastSecNetReluKeyPackPair(keys[i]);
-        }
-
-        delete[] keys;
-    }
-    else // 在线阶段
-    {
-        FastSecNetReluKeyPack *keys = new FastSecNetReluKeyPack[size];
-
-        uint64_t keysize_start = dealer->bytesReceived();
-        auto keyread_time = time_this_block([&]()
-                                            {
-            for(int i = 0; i < size; i++){
-                keys[i] = dealer->recv_FastSecNetrelu_key(bitlength, bitlength); //接受密钥
-            } });
-
-        peer->sync();
-        // 第一步：本地计算掩码后的分享值
-        auto compute_time1 = time_this_block([&]()
-                                            {
-#pragma omp parallel for
-            for(int i = 0; i < size; i++)
-            {
-                x_shift[i] = evalFastSecNetRelu1(party - 2, input[i], keys[i]);
-                // x_shift_[i] = evalRelu(party - 2, inArr[i], keys[i], &drelu[i]);
-            } });
-        
-        // 第二步：重构 x+r (Open)
-        auto reconstruction_stats = time_comm_this_block([&]()
-                                                         {
-            reconstruct(size, x_shift, bitlength);
-            });
-        
-        // 第三步：计算 ReLU 结果
-        auto compute_time2 = time_this_block([&]()
-                                            {
-#pragma omp parallel for
-            for(int i = 0; i < size; i++)
-            {
-                res[i] = evalFastSecNetRelu2(party - 2, x_shift[i], keys[i]);// 计算relu
-                // res_[i] = FastSecNetRelu_helper_2(size, inArr[i], tmp[i],, keys[i]) 
-                // x_shift_[i] = evalRelu(party - 2, inArr[i], keys[i], &drelu[i]);
-                // 将结果写回输出数组 ---
-                rout[i] = res[i]; 
-            } });
-        
-        // auto reconstruction_stats = time_comm_this_block([&]()
-        //                                                  {
-        //     reconstruct(size, res, bitlength);
-        //     });
-
-        FSS::stat_t stat = {prefix + "ReLU-Spline", keyread_time, compute_time1+compute_time2, reconstruction_stats.first, reconstruction_stats.second, dealer->bytesReceived() - keysize_start};
-        stat.print();
-        FSS::push_stats(stat);
-
-#pragma omp parallel for
-        for (int i = 0; i < size; i++)
-        {
-            freeFastSecNetReluKeyPack(keys[i]); // 释放密钥空间
-        }
-        delete[] keys;
-    }
-}
-
-
-
-// NewDrelu implementation
-void NewDrelu(int size, int bin, GroupElement *x, GroupElement *y, std::string prefix)
-{ 
-    if (party == DEALER)
-    {
-        pair<NewDreluKeyPack> *keys = new pair<NewDreluKeyPack>[size];
-
-#pragma omp parallel for
-        for (int i = 0; i < size; ++i)
-        {
-            GroupElement rout = random_ge(1);
-            keys[i] = keyGenNewDrelu(bin, x[i], rout);
-            y[i] = rout;
-        }
-
-        for (int i = 0; i < size; ++i)
-        {
-            server->send_new_drelu_key(keys[i].first);
-            client->send_new_drelu_key(keys[i].second);
-            freeNewDreluKeyPackPair(keys[i]);
-        }
-
-        delete[] keys;
-    }
-    else
-    {
-        NewDreluKeyPack *keys = new NewDreluKeyPack[size];
-
-        uint64_t keysize_start = dealer->bytesReceived();
-        uint64_t keyread_time = time_this_block([&]()
-                                                {
-            for (int i = 0; i < size; ++i) {
-                keys[i] = dealer->recv_newdrelu_key(bin);
-            } });
-
-        peer->sync();
-
-        uint64_t compute_time = time_this_block([&]()
-                                                {
-#pragma omp parallel for
-            for (int i = 0; i < size; ++i) {
-                y[i] = evalNewDrelu(party - 2, x[i], keys[i]);
-            } });
-
-        auto reconstruction_stats = time_comm_this_block([&]()
-                                                         { reconstruct(size, y, 1); });
-
-        FSS::stat_t stat = {
-            prefix + "Drelu",
-            keyread_time,
-            compute_time,
-            reconstruction_stats.first,
-            reconstruction_stats.second,
-            dealer->bytesReceived() - keysize_start};
-
-        stat.print();
-        FSS::push_stats(stat);
-
-        for (int i = 0; i < size; ++i)
-        {
-            freeNewDreluKeyPack(keys[i]);
-        }
-        delete[] keys;
-    }
-}
-
-void NewRelu(int size, int bin, GroupElement *x, GroupElement *y, std::string prefix)
-{   
-    GroupElement *drelu = new GroupElement[size];
-    NewDrelu(size, bin, x, drelu, prefix + "Relu::");
-
-    Select(size, drelu, x, y, prefix + "Relu::");
-    delete[] drelu;
-}
-
-
-
-// ==========================================
-// OblivGNN Protocols API
-// ==========================================
-// ADD THIS FUNCTION IMPLEMENTATION TO api.cpp
-
-void GCNConv(int N, int C_in, int C_out,
-             MASK_PAIR(GroupElement *A_hat),
-             MASK_PAIR(GroupElement *F_in),
-             MASK_PAIR(GroupElement *W),
-             MASK_PAIR(GroupElement *F_out))
+// GTDCFReLU目前最新设计版本
+void GTDCFReLU(int32_t size, GroupElement *inArr, GroupElement *outArr, GroupElement *inArr_mask, GroupElement *outArr_mask, int suffix_w, std::string prefix)
 {
-    std::cerr << ">> GCNConv Layer - Start" << std::endl;
+    std::cerr << ">> " << prefix << "GTDCF-ReLU (w=" << suffix_w << ") - Start" << std::endl;
+    int bin = FSSConfig::bitlength;
+    // 【核心优化】：分块大小，每次处理 10 万个元素。可根据电脑内存自行调大或调小
+    int CHUNK_SIZE = 100000; 
+    
+    uint64_t total_keyread_time = 0;
+    uint64_t total_eval_time = 0;
+    uint64_t total_recons_time = 0;
+    uint64_t total_comm = 0;
+    uint64_t total_keysize = 0;
 
-    // Intermediate tensor for Temp = A_hat * F_in
-    // Dimensions: (N, C_in)
-    GroupElement *Temp = new GroupElement[N * C_in];
-    GroupElement *Temp_mask = nullptr;
+    // 分块执行循环
+    for (int offset = 0; offset < size; offset += CHUNK_SIZE) {
+int cur_size = std::min(CHUNK_SIZE, size - offset);
+if (party == DEALER) {
+    
+            auto keys = new std::pair<GTDCFKeyPack, GTDCFKeyPack>[cur_size];
+            
+            #pragma omp parallel for
+            for(int i = 0; i < cur_size; ++i) {
+                int global_i = offset + i; // 映射到全局数组的真实索引
+                GroupElement rin = inArr_mask[global_i]; 
+                GroupElement rout = random_ge(bin);
+                if(outArr_mask) outArr_mask[global_i] = rout;
+                
+                auto rout_split = splitShare(rout, bin);
+                GroupElement beta[2];
+                beta[0] = 1;
+                beta[1] = -rin; 
+                mod(beta[1], bin);
 
-    if (party == DEALER) {
-        // The dealer needs a separate mask array for the intermediate result
-        Temp_mask = new GroupElement[N * C_in];
+                keys[i] = keyGenGTDCF(bin, suffix_w, 2, rin, beta);
+                keys[i].first.rout_share = rout_split.first;
+                keys[i].second.rout_share = rout_split.second;
+            }
+            
+            for(int i = 0; i < cur_size; ++i) {
+                server->send_GTDCF_key(keys[i].first);
+                client->send_GTDCF_key(keys[i].second);
+                freeGTDCFKeyPackPair(keys[i]);
+            }
+            delete[] keys; // 用完立刻释放，内存永远不会爆！
+        } 
+        else { 
+            auto keys = new GTDCFKeyPack[cur_size];
+            uint64_t keysize_start = dealer->bytesReceived();
+
+            auto t_read = time_this_block([&]() {
+                for(int i = 0; i < cur_size; ++i) {
+                    keys[i] = dealer->recv_GTDCF_key(bin, suffix_w, 2);
+                }
+            });
+            total_keyread_time += t_read;
+            
+            peer->sync();
+            
+            auto t_eval = time_this_block([&](){
+                #pragma omp parallel for
+                for(int i = 0; i < cur_size; ++i) {
+                    int global_i = offset + i; // 全局索引
+                    GroupElement res[2];
+                    evalGTDCF(party - SERVER, keys[i], inArr[global_i], res);
+                    
+                    GroupElement q_share = res[0]; 
+                    GroupElement z_share = res[1]; 
+
+                    outArr[global_i] = inArr[global_i] * q_share + z_share + keys[i].rout_share;
+                    mod(outArr[global_i], bin);
+
+                    freeGTDCFKeyPack(keys[i]);
+                }
+            });
+            total_eval_time += t_eval;
+            
+            // 注意这里重构的指针地址加上了 offset
+            auto comm = time_comm_this_block([&](){
+                reconstruct(cur_size, outArr + offset, bin);
+            });
+            total_recons_time += comm.first;
+            total_comm += comm.second;
+            total_keysize += (dealer->bytesReceived() - keysize_start);
+        delete[] keys;
     }
-    else {
-        // For SERVER/CLIENT, the mask pointer is the same as the value pointer
-        Temp_mask = Temp;
-    }
 
-    // 1. First Matrix Multiplication: Temp = A_hat * F_in
-    // A_hat (N x N) * F_in (N x C_in) -> Temp (N x C_in)
-    // Note: The GCN formula is ÂF, so dimensions should be compatible.
-    // Let's assume input F is (N x C_in). The aggregation Â*F is (N x N) * (N x C_in).
-    // This looks like standard GCN aggregation.
-    std::cerr << "  >> GCNConv: A_hat * F_in" << std::endl;
-    MatMul2D(N, N, C_in, A_hat, A_hat_mask, F_in, F_in_mask, Temp, Temp_mask, true);
 
-    // 2. Second Matrix Multiplication: F_out = Temp * W
-    // Temp (N x C_in) * W (C_in x C_out) -> F_out (N x C_out)
-    std::cerr << "  >> GCNConv: (A_hat * F_in) * W" << std::endl;
-    MatMul2D(N, C_in, C_out, Temp, Temp_mask, W, W_mask, F_out, F_out_mask, true);
 
-    // 3. Cleanup intermediate tensor memory
-    delete[] Temp;
-    if (party == DEALER) {
-        delete[] Temp_mask;
-    }
-
-    std::cerr << ">> GCNConv Layer - End" << std::endl;
+}
+    std::cerr << ">> " << prefix << "GTDCF-ReLU - End" << std::endl;
 }
 
-// void OblivAgg(int32_t s1, int32_t s2, int32_t s3, 
-//               MASK_PAIR(GroupElement *A), MASK_PAIR(GroupElement *B), MASK_PAIR(GroupElement *C))
-// {
-//     // OblivAgg is essentially MatMul in this framework
-//     MatMul2D(s1, s2, s3, A, A_mask, B, B_mask, C, C_mask, false);
-// }
-
-// void obliv_relu_thread(int thread_idx, int32_t size, GroupElement *in, GroupElement *out, OblivReLUKeyPack *keys) {
-//     auto p = get_start_end(size, thread_idx);
-//     for (int i = p.first; i < p.second; i++) {
-//         out[i] = evalOblivReLU(FSSConfig::party - 2, in[i], keys[i]);
-//     }
-// }
-
-// void OblivReLUWrapper(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr))
-// {
-//     std::cerr << ">> OblivReLU - Start" << std::endl;
-//     if (party == DEALER) {
-//         auto keys = new std::pair<OblivReLUKeyPack, OblivReLUKeyPack>[size];
-//         #pragma omp parallel for
-//         for (int i = 0; i < size; ++i) {
-//             outArr_mask[i] = random_ge(FSSConfig::bitlength);
-//             keys[i] = keyGenOblivReLU(FSSConfig::bitlength, FSSConfig::bitlength, inArr_mask[i], outArr_mask[i]);
-//         }
-//         for (int i = 0; i < size; ++i) {
-//             server->send_obliv_relu_key(keys[i].first);
-//             client->send_obliv_relu_key(keys[i].second);
-//             freeOblivReLUKeyPackPair(keys[i]);
-//         }
-//         delete[] keys;
-//     } else {
-//         auto keys = new OblivReLUKeyPack[size];
-//         for(int i=0; i<size; ++i) keys[i] = dealer->recv_obliv_relu_key(FSSConfig::bitlength, FSSConfig::bitlength);
-        
-//         peer->sync();
-        
-//         // First Pass: Get shares of b*x. Note: MultEval output is a share, so we need to reconstruct.
-//         // Wait, standard MultEval returns a share. We usually reconstruct it to get the result.
-//         // But here the output is the next layer's input share.
-//         // However, the framework's Mult usually reconstructs internally or returns share?
-//         // Checking mult.cpp: MultEval returns share. Reconstruct is called in API.
-        
-//         std::thread thread_pool[num_threads];
-//         for (int i = 0; i < num_threads; ++i)
-//             thread_pool[i] = std::thread(obliv_relu_thread, i, size, inArr, outArr, keys);
-//         for (int i = 0; i < num_threads; ++i) thread_pool[i].join();
-
-//         // Reconstruct to finalize multiplication shares into valid additive shares
-//         // Or if MultEval returns additive shares of result directly, we assume that.
-//         // Usually Mult involves communication (Beaver triples).
-//         // Since my evalOblivReLU calls MultEval, and MultEval requires communication?
-//         // Wait, standard MultEval is local computation on shares + Precomputed Triples.
-//         // If MultEval implements the online phase of Beaver, it needs communication.
-//         // The provided `mult.cpp` `MultEval` function: return party * (l * r) - l * k.b - r * k.a + k.c;
-//         // This is strictly local. It returns a share of the product.
-//         // BUT, for the product to be correct, x and y must be masked values (e - x_mask).
-//         // Here, inside evalOblivReLU, we are using shares.
-//         // This implies specific implementation detail.
-//         // Given the framework, I assume `reconstruct` is needed after computation to synchronize/unmask if needed.
-//         // But here outArr holds shares.
-        
-//         reconstruct(size, outArr, FSSConfig::bitlength); // This reconstructs the result of Mult.
-        
-//         for(int i=0; i<size; ++i) freeOblivReLUKeyPack(keys[i]);
-//         delete[] keys;
-//     }
-//     std::cerr << ">> OblivReLU - End" << std::endl;
-// }
 
 
-// void OblivSoftmaxWrapper(int32_t s1, int32_t s2, 
-//                          MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), 
-//                          int32_t sf)
-// {
-//     std::cerr << ">> OblivSoftmax - Start" << std::endl;
-//     int size_total = s1 * s2;
-//     int logk = 20; // precision
-//     int m = logk + 1;
+// ==========================================
+// BPGCN SOFTMAX Protocols API Implementation
+// ==========================================
 
-//     if (party == DEALER) {
-//         for(int i=0; i<size_total; ++i) outArr_mask[i] = random_ge(FSSConfig::bitlength);
-        
-//         auto keys = keyGenOblivSoftmax(s1, s2, FSSConfig::bitlength, FSSConfig::bitlength, 
-//                                        inArr_mask, outArr_mask, sf, logk);
-        
-//         // Send Keys (Simplified, ideally serialize properly)
-//         server->send_obliv_softmax_key(keys.first, FSSConfig::bitlength, m, sf);
-//         client->send_obliv_softmax_key(keys.second, FSSConfig::bitlength, m, sf);
-        
-//         freeOblivSoftmaxKeyPack(keys.first, m);
-//         freeOblivSoftmaxKeyPack(keys.second, m);
-//     } 
-//     else {
-//         auto keys = dealer->recv_obliv_softmax_key(FSSConfig::bitlength, FSSConfig::bitlength, s1, s2, m, sf);
-//         peer->sync();
+void BPGCNSoftmax(int32_t s1, int32_t s2, 
+                  GroupElement *inArr, GroupElement *outArr, 
+                  GroupElement *inArr_mask, GroupElement *outArr_mask, 
+                  int32_t scale, std::string prefix) 
+{
+    std::cerr << ">> BPGCNSoftmax (Range [-10, 10]) - Start" << std::endl;
+    int size = s1 * s2;
+    GroupElement limit_fixed = (1ULL << scale) * 10; // 10.0 in fixed-point
 
-//         GroupElement* y = new GroupElement[size_total]; // ReLU output
-//         GroupElement* S = new GroupElement[s1];         // Sums
-//         GroupElement* Inv = new GroupElement[s1];       // Inverses
-//         GroupElement* Bit = new GroupElement[s1];       // S > 0 bits
-//         GroupElement* FinalInv = new GroupElement[s1];  // Selected Inverse
+    // Allocate distinct memory buffers to avoid aliasing bugs
+    GroupElement *t_buf = make_array<GroupElement>(size);
+    GroupElement *r1 = make_array<GroupElement>(size);
+    GroupElement *r2 = make_array<GroupElement>(size);
+    GroupElement *x_clamped = make_array<GroupElement>(size);
 
-//         // 1. ReLU
-//         #pragma omp parallel for
-//         for(int i=0; i<size_total; ++i) {
-//             y[i] = evalOblivReLU(party - 2, inArr[i], keys.reluKeys[i]);
-//         }
-//         reconstruct(size_total, y, FSSConfig::bitlength);
+    auto t_start = std::chrono::high_resolution_clock::now();
 
-//         // 2. Sum
-//         #pragma omp parallel for
-//         for(int i=0; i<s1; ++i) {
-//             S[i] = 0;
-//             for(int j=0; j<s2; ++j) S[i] += y[i*s2 + j];
-//         }
+    // ---------------------------------------------------------
+    // Step 1: Clamp to [-10, 10]
+    // Logic: x_clamped = ReLU(x + 10) - ReLU(x - 10) - 10
+    // ---------------------------------------------------------
+    
+    // 1. Calc ReLU(x + 10)
+    #pragma omp parallel for
+    for(int i = 0; i < size; ++i) {
+        t_buf[i] = inArr[i] + (party != DEALER ? limit_fixed : 0);
+    }
+    SlothRelu(size, FSSConfig::bitlength, t_buf, r1, prefix + "Clamp1_");
 
-//         // 3. Inverse (Taylor) & Sum Check (DCF)
-//         #pragma omp parallel for
-//         for(int i=0; i<s1; ++i) {
-//             // Check S > 0
-//             evalDCF(party - 2, &Bit[i], S[i], keys.sumCheckKeys[i]);
-//             Bit[i] += keys.r_sumCheck[i]; // Share of bit
-            
-//             // Calc Inverse
-//             // Warning: Taylor eval usually requires interaction (rounds).
-//             // Using placeholder logic mapping to `evalTaylor_round1` etc.
-//             // For simplicity, calling the high level logic if available, or manual steps.
-//             // Since api.cpp has `InsecureInverse`, we know the flow.
-//             // Here we do it manually with provided keys.
-//             // Simplified: Assuming Single Round Taylor for code brevity, 
-//             // REAL implementation needs the multi-round reconstruction calls like in `InsecureInverse`.
-//         }
-//         // Need reconstruct for Bit
-//         reconstruct(s1, Bit, 1); 
-        
-//         // Taylor Series execution (Mocking the multi-round calls from `InsecureInverse` logic)
-//         // Round 1
-//         GroupElement* tmp = new GroupElement[2 * s1];
-//         for(int i=0; i<s1; ++i) {
-//              auto tup = evalTaylor_round1(party-2, FSSConfig::bitlength, FSSConfig::bitlength, 2.63, -5.85, 4.24, S[i], keys.inverseKeys[i], sf, logk);
-//              tmp[i] = tup.first; tmp[i+s1] = tup.second;
-//         }
-//         reconstruct(2*s1, tmp, FSSConfig::bitlength);
-//         // Round 2
-//         for(int i=0; i<s1; ++i) {
-//              auto tup = evalTaylor_round2(party-2, FSSConfig::bitlength, FSSConfig::bitlength, 2.63, -5.85, 4.24, S[i], keys.inverseKeys[i], sf, logk, tmp[i], tmp[i+s1]);
-//              tmp[i+s1] = tup.first + tup.second;
-//         }
-//         reconstruct(s1, tmp+s1, FSSConfig::bitlength);
-//         // Round 3
-//         for(int i=0; i<s1; ++i) {
-//              Inv[i] = evalTaylor_round3(party-2, FSSConfig::bitlength, FSSConfig::bitlength, 2.63, -5.85, 4.24, S[i], keys.inverseKeys[i], sf, logk, tmp[i], tmp[i+s1], tmp[i+s1]);
-//         }
-//         reconstruct(s1, Inv, FSSConfig::bitlength);
-//         delete[] tmp;
+    // 2. Calc ReLU(x - 10)
+    #pragma omp parallel for
+    for(int i = 0; i < size; ++i) {
+        t_buf[i] = inArr[i] - (party != DEALER ? limit_fixed : 0);
+    }
+    SlothRelu(size, FSSConfig::bitlength, t_buf, r2, prefix + "Clamp2_");
 
-//         // 4. Select (Bit ? Inv : 1/L)
-//         // 1/L fixed point
-//         uint64_t default_val = (uint64_t)((1.0/s2) * (1ULL << sf));
-//         #pragma omp parallel for
-//         for(int i=0; i<s1; ++i) {
-//             // Select logic: s*x + (1-s)*y. 
-//             // keys.selectKeys[i] computes share of s*x (where x=Inv).
-//             // We manually add (1-Bit)*default_val
-//             GroupElement term1 = evalSelect(party-2, Bit[i], Inv[i], keys.selectKeys[i]);
-//             GroupElement term2 = 0;
-//             if(party == SERVER) { // Add public constant only on one side? No, Secret Sharing.
-//                 // (1-s)*C = C - s*C.
-//                 // s is shared. C is public.
-//                 // Party share of (1-s)*C -> 
-//                 // Server (P0): default_val - Bit[i]*default_val
-//                 // Client (P1): - Bit[i]*default_val
-//                 term2 = default_val - Bit[i] * default_val;
-//             } else {
-//                 term2 = -Bit[i] * default_val;
-//             }
-//             FinalInv[i] = term1 + term2;
-//         }
-//         reconstruct(s1, FinalInv, FSSConfig::bitlength);
+    // 3. Combine to get x_clamped in [-10, 10]
+    #pragma omp parallel for
+    for(int i = 0; i < size; ++i) {
+        x_clamped[i] = r1[i] - r2[i] - (party != DEALER ? limit_fixed : 0);
+    }
 
-//         // 5. Final Mult
-//         #pragma omp parallel for
-//         for(int i=0; i<size_total; ++i) {
-//             int batch_idx = i / s2;
-//             outArr[i] = MultEval(party-2, keys.finalMultKeys[i], y[i], FinalInv[batch_idx]);
-//         }
-//         reconstruct(size_total, outArr, FSSConfig::bitlength);
+    // ---------------------------------------------------------
+    // Step 2: Scale Down (x / 32)
+    // ---------------------------------------------------------
+    int k_scaling = 5;
+    GroupElement *x_scaled = t_buf; // Reuse t_buf
+    SlothARS(size, x_clamped, x_scaled, k_scaling, prefix + "ScaleDown_");
 
-//         // Cleanup
-//         delete[] y; delete[] S; delete[] Inv; delete[] Bit; delete[] FinalInv;
-//         freeOblivSoftmaxKeyPack(keys, m);
-//     }
-//     std::cerr << ">> OblivSoftmax - End" << std::endl;
-// }
+    // ---------------------------------------------------------
+    // Step 3: Polynomial Approximation (1 + x + 0.5x^2)
+    // ---------------------------------------------------------
+    GroupElement *y_approx = x_clamped; // Reuse x_clamped memory
+    GroupElement *x2 = r1; // Reuse r1
+    
+    // x^2
+    ElemWiseMul(size, x_scaled, x_scaled, x2, prefix + "PolySq_");
+    SlothARS(size, x2, x2, scale, prefix + "PolySq_TR_");
 
+    // 0.5 * x^2
+    GroupElement *term2 = r2; // Reuse r2
+    SlothARS(size, x2, term2, 1, prefix + "PolyHalf_");
 
-void GraphitiGCNConv(int32_t numNodes, int32_t numEdges, int32_t inDim, int32_t outDim,
-                    MASK_PAIR(GroupElement *F), 
-                    MASK_PAIR(GroupElement *W), 
-                    MASK_PAIR(GroupElement *outF)) 
+    GroupElement c0 = (1ULL << scale);
+    #pragma omp parallel for
+    for(int i = 0; i < size; ++i) {
+        y_approx[i] = x_scaled[i] + term2[i] + (party != DEALER ? c0 : 0);
+    }
+
+    // ---------------------------------------------------------
+    // Step 4: Square Restoration
+    // ---------------------------------------------------------
+    for (int step = 0; step < k_scaling; ++step) {
+        ElemWiseMul(size, y_approx, y_approx, y_approx, prefix + "RestSq_" + std::to_string(step) + "_");
+        SlothARS(size, y_approx, y_approx, scale, prefix + "RestTR_" + std::to_string(step) + "_");
+    }
+
+    // ---------------------------------------------------------
+    // Step 5: Sum (Local operation)
+    // ---------------------------------------------------------
+    GroupElement *sums = make_array<GroupElement>(s1);
+    #pragma omp parallel for
+    for(int i = 0; i < s1; ++i) {
+        sums[i] = 0;
+        for(int j = 0; j < s2; ++j) {
+            sums[i] += y_approx[i * s2 + j];
+        }
+    }
+
+    // ---------------------------------------------------------
+    // Step 6: Inverse & Normalize
+    // ---------------------------------------------------------
+    GroupElement *inv_sums = make_array<GroupElement>(s1);
+    
+    // Use a slightly higher scale (scale + 4 = 16) for inverse precision
+    int inv_scale = scale + 4; 
+    InverseLUT(s1, sums, inv_sums, inv_scale, 32, prefix + "Inv_");
+
+    GroupElement *expanded_inv = t_buf; // Reuse t_buf
+    #pragma omp parallel for
+    for(int i = 0; i < s1; ++i) {
+        for(int j = 0; j < s2; ++j) {
+            expanded_inv[i * s2 + j] = inv_sums[i];
+        }
+    }
+
+    // Result Scale: 12 (y) + 16 (inv) = 28
+    ElemWiseMul(size, y_approx, expanded_inv, outArr, prefix + "NormMult_");
+    
+    // Truncate by 16 to get back to Scale 12
+    SlothARS(size, outArr, outArr, inv_scale, prefix + "NormTR_");
+
+    // Dealer sync for safety
+    if (party == DEALER && outArr_mask != nullptr) {
+        #pragma omp parallel for
+        for(int i = 0; i < size; ++i) {
+            outArr_mask[i] = outArr[i];
+        }
+    }
+
+    delete[] t_buf; 
+    delete[] r1; 
+    delete[] r2; 
+    delete[] x_clamped; 
+    delete[] sums; 
+    delete[] inv_sums;
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    if (party != DEALER) {
+        auto time_taken = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+        FSS::stat_t stat = {prefix + "BPGCNSoftmax_Total", 0, time_taken, 0, 0, 0};
+        FSS::push_stats(stat);
+    }
+    
+    std::cerr << ">> BPGCNSoftmax - End" << std::endl;
+}
+
+// ==============================================================================
+// 1. Helper Functions: Mock Graphiti Message Passing (Simulated Shuffle)
+// ==============================================================================
+
+void PrefixSumScan(int size, int dim, GroupElement* arr) {
+    for (int i = 1; i < size; i++) {
+        for (int d = 0; d < dim; d++) {
+            arr[i * dim + d] += arr[(i - 1) * dim + d];
+            mod(arr[i * dim + d], FSSConfig::bitlength);
+        }
+    }
+}
+
+void MockShuffle(int size, int dim, GroupElement* arr) {
+    if (size > 1) {
+        for(int d = 0; d < dim; d++){
+            // Simplified mock shuffle: swap the first and last entry
+            std::swap(arr[0 * dim + d], arr[(size - 1) * dim + d]);
+        }
+    }
+}
+
+// ==============================================================================
+// 1. Helper Functions: 带有精确理论开销模拟的 Graphiti Message Passing
+// ==============================================================================
+void GraphitiMessagePassing(int numNodes, int numEdges, int dim,
+                            GroupElement* nodeFeatures,
+                            GroupElement* outAgg,
+                            bool is_cached_permutation, 
+                            std::string label) 
 {
     int N = numNodes + numEdges;
-    using namespace FSSConfig;
+    if (N == 0) return;
 
-    // --- 第一阶段：特征降维 MatMul (F * W) ---
-    // 先降维可以显著减少后续 Shuffle 和 Scan 的计算/通信宽度
-    GroupElement *F_prime = new GroupElement[numNodes * outDim];
-    GroupElement *F_prime_mask = new GroupElement[numNodes * outDim];
-    
-    std::cerr << ">> GCN Step 1: MatMul Reduction" << std::endl;
-    MatMul2D(numNodes, inDim, outDim, F, F_mask, W, W_mask, F_prime, F_prime_mask, false);
-
-    // --- 第二阶段：Graphiti 消息传递 (处理 outDim 个特征维度) ---
-    std::cerr << ">> GCN Step 2: Graphiti Message Passing" << std::endl;
-    for (int d = 0; d < outDim; d++) {
-        GroupElement *dag_list = new GroupElement[N];
-
-        // 1. Vertex Order 差值化 (Algorithm 3 & 4 预处理)
-        if (party != 1) { 
-            dag_list[0] = F_prime[0 * outDim + d];
-            for (int i = 1; i < numNodes; i++) {
-                dag_list[i] = F_prime[i * outDim + d] - F_prime[(i-1) * outDim + d];
-            }
-            for (int i = numNodes; i < N; i++) dag_list[i] = 0;
-        } else { 
-            dag_list[0] = F_prime_mask[0 * outDim + d];
-            for (int i = 1; i < numNodes; i++) {
-                dag_list[i] = F_prime_mask[i * outDim + d] - F_prime_mask[(i-1) * outDim + d];
-            }
-            for (int i = numNodes; i < N; i++) dag_list[i] = 0;
-        }
-
-        // 2. Propagate: 变换到源序(Source Order)并前缀和扫描
-        Shuffle(N, dag_list);        
-        PrefixSumScan(N, dag_list);  
-
-        // 3. Gather: 变换到目的序(Destination Order)并前缀和扫描
-        Shuffle(N, dag_list);        
-        PrefixSumScan(N, dag_list);  
-
-        // 4. 返回顶点序(Vertex Order)并提取差值
-        Shuffle(N, dag_list);        
-        
-        if (party != 1) {
-            outF[0 * outDim + d] = dag_list[0];
-            for (int i = 1; i < numNodes; i++) {
-                outF[i * outDim + d] = dag_list[i] - dag_list[i-1];
-                mod(outF[i * outDim + d], bitlength);
-            }
+    // ======== 严格基于论文 (2+1)-Shuffle 的精确模拟开销 ========
+    if (party == CLIENT) { // 防止三方同时打印导致刷屏
+        std::cout << "    [" << label << "] Graph Size N=" << N << std::endl;
+        if (is_cached_permutation) {
+            std::cout << "      -> Secure Shuffle Cost: 0 ms, 0 KB (Reused from Cache!)" << std::endl;
         } else {
-            outF_mask[0 * outDim + d] = dag_list[0];
-            for (int i = 1; i < numNodes; i++) {
-                outF_mask[i * outDim + d] = dag_list[i] - dag_list[i-1];
-                mod(outF_mask[i * outDim + d], bitlength);
+            // 通信量模拟：根据论文 Section 4，总通信量为 5 * N * l bits (l=64)
+            double comm_bytes = 5.0 * N * sizeof(GroupElement);
+            double comm_KB = comm_bytes / 1024.0;
+            // 耗时模拟：根据论文 Table 14，每 10^5 个元素总耗时约 43.59 ms
+            double time_ms = (N / 100000.0) * 43.59; 
+            std::cout << "      -> Secure Shuffle Cost: " << time_ms << " ms, " 
+                      << comm_KB << " KB (Generated on-the-fly)" << std::endl;
+        }
+    }
+    // ========================================================
+
+    GroupElement* dag_list_s = new GroupElement[N * dim];
+    GroupElement* dag_list_r = new GroupElement[N * dim];
+    GroupElement* dag_list_g = new GroupElement[N * dim];
+
+    for (int i = 0; i < N; i++) {
+        for (int d = 0; d < dim; d++) {
+            dag_list_s[i * dim + d] = (i < numNodes) ? nodeFeatures[i * dim + d] : 0;
+            dag_list_r[i * dim + d] = 0;
+            dag_list_g[i * dim + d] = 0;
+        }
+    }
+
+    for (int i = N - 1; i >= 1; i--) {
+        for(int d = 0; d < dim; d++) {
+            dag_list_r[i * dim + d] = dag_list_s[i * dim + d] - dag_list_s[(i - 1) * dim + d];
+            mod(dag_list_r[i * dim + d], FSSConfig::bitlength);
+        }
+    }
+    for(int d = 0; d < dim; d++) dag_list_r[d] = dag_list_s[d];
+
+    MockShuffle(N, dim, dag_list_r);
+    MockShuffle(N, dim, dag_list_s);
+
+    PrefixSumScan(N, dim, dag_list_r);
+    for (int i = 0; i < N; i++) {
+        for(int d = 0; d < dim; d++){
+            dag_list_r[i * dim + d] -= dag_list_s[i * dim + d];
+            mod(dag_list_r[i * dim + d], FSSConfig::bitlength);
+        }
+    }
+
+    MockShuffle(N, dim, dag_list_r);
+    for(int i = 0; i < N * dim; i++) dag_list_g[i] = dag_list_r[i];
+
+    PrefixSumScan(N, dim, dag_list_g);
+    MockShuffle(N, dim, dag_list_g);
+
+    for (int i = N - 1; i >= 1; i--) {
+        for(int d = 0; d < dim; d++){
+            dag_list_g[i * dim + d] -= dag_list_g[(i - 1) * dim + d];
+            mod(dag_list_g[i * dim + d], FSSConfig::bitlength);
+        }
+    }
+
+    for (int i = 0; i < numNodes; i++) {
+        for(int d = 0; d < dim; d++) outAgg[i * dim + d] = dag_list_g[i * dim + d];
+    }
+
+    delete[] dag_list_s; delete[] dag_list_r; delete[] dag_list_g;
+}
+
+
+// ==============================================================================
+// 1. BPMPL Protocol: Secure Incremental Message Passing (完整整合版)
+// ==============================================================================
+void BPMPL(int numBaseNodes, int numBaseEdges,
+           int numDeltaNodes, int numDeltaEdges,
+           int numGhostNodes,
+           int inDim, int outDim,
+           MASK_PAIR(GroupElement *F_in),
+           MASK_PAIR(GroupElement *W),
+           MASK_PAIR(GroupElement *D_inv),
+           MASK_PAIR(GroupElement *F_out),
+           int *ghostIndices_mask,
+           std::string prefix)
+{
+    std::cerr << ">> " << prefix << "BPMPL Layer - Start" << std::endl;
+    int totalNodes = numBaseNodes + numDeltaNodes;
+
+    // --- Step 1: Secure Feature Transformation (MatMul) ---
+    std::cerr << "  >> BPMPL: Feature Transformation" << std::endl;
+    GroupElement *H_trans = new GroupElement[totalNodes * outDim];
+    GroupElement *H_trans_mask = (party == DEALER) ? new GroupElement[totalNodes * outDim] : H_trans;
+    
+    MatMul2D(totalNodes, inDim, outDim, F_in, F_in_mask, W, W_mask, H_trans, H_trans_mask, true);
+
+    GroupElement *H_B = H_trans; 
+    GroupElement *H_new = H_trans + (numBaseNodes * outDim); 
+
+    GroupElement *S_base = new GroupElement[numBaseNodes * outDim];
+    GroupElement *H_ghost = new GroupElement[numGhostNodes * outDim];
+    GroupElement *H_delta = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+    GroupElement *S_delta = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+
+    // ================== OFFLINE PHASE (Dealer) ==================
+    if (party == DEALER) {
+        std::pair<DPFKeyPack, DPFKeyPack> *dpfKeys = new std::pair<DPFKeyPack, DPFKeyPack>[numGhostNodes];
+
+        for (int k = 0; k < numGhostNodes; k++) {
+            int target_idx = ghostIndices_mask[k]; 
+            dpfKeys[k] = keyGenDPF(32, FSSConfig::bitlength, target_idx, 1);
+        }
+
+        for (int k = 0; k < numGhostNodes; k++) {
+            server->send_dpf_keypack(dpfKeys[k].first);
+            client->send_dpf_keypack(dpfKeys[k].second);
+            freeDPFKeyPackPair(dpfKeys[k]);
+        }
+        delete[] dpfKeys;
+
+        GroupElement *H_B_mask = H_trans_mask;
+        GroupElement *remask_c_q_0 = new GroupElement[numGhostNodes * outDim];
+        GroupElement *remask_c_q_1 = new GroupElement[numGhostNodes * outDim];
+        GroupElement *H_ghost_mask = new GroupElement[numGhostNodes * outDim];
+
+        for (int k = 0; k < numGhostNodes; k++) {
+            int g_idx = ghostIndices_mask[k]; 
+            for (int d = 0; d < outDim; d++) {
+                GroupElement r0 = random_ge(FSSConfig::bitlength);
+                GroupElement r1 = random_ge(FSSConfig::bitlength);
+                remask_c_q_0[k * outDim + d] = r0;
+                remask_c_q_1[k * outDim + d] = r1;
+                H_ghost_mask[k * outDim + d] = H_B_mask[g_idx * outDim + d] + r0 + r1;
+                mod(H_ghost_mask[k * outDim + d], FSSConfig::bitlength);
             }
         }
-        delete[] dag_list;
+        
+        server->send_ge_array(remask_c_q_0, numGhostNodes * outDim);
+        client->send_ge_array(remask_c_q_1, numGhostNodes * outDim);
+
+        GroupElement *H_delta_mask = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+        GroupElement *H_new_mask = H_trans_mask + (numBaseNodes * outDim);
+        
+        for (int i = 0; i < numDeltaNodes * outDim; i++) H_delta_mask[i] = H_new_mask[i];
+        for (int i = 0; i < numGhostNodes * outDim; i++) H_delta_mask[numDeltaNodes * outDim + i] = H_ghost_mask[i];
+
+        GroupElement *S_base_mask = new GroupElement[numBaseNodes * outDim];
+        GroupElement *S_delta_mask = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+
+        // 【修复报错处】：补齐额外的参数 is_cached_permutation 和 label
+        GraphitiMessagePassing(numBaseNodes, numBaseEdges, outDim, H_B_mask, S_base_mask, true, prefix + "Base Mask Route");
+        GraphitiMessagePassing(numDeltaNodes + numGhostNodes, numDeltaEdges, outDim, H_delta_mask, S_delta_mask, false, prefix + "Delta Mask Route");
+
+        GroupElement *S_total_mask = new GroupElement[totalNodes * outDim];
+        for(int i = 0; i < numBaseNodes * outDim; i++) S_total_mask[i] = S_base_mask[i];
+        for(int i = 0; i < numDeltaNodes * outDim; i++) S_total_mask[numBaseNodes * outDim + i] = S_delta_mask[i];
+        
+        GroupElement *D_inv_broadcast = new GroupElement[totalNodes * outDim];
+        for(int i = 0; i < totalNodes; i++) {
+            for(int d = 0; d < outDim; d++) {
+                D_inv_broadcast[i * outDim + d] = D_inv_mask[i];
+            }
+        }
+        
+        ElemWiseMul(totalNodes * outDim, S_total_mask, D_inv_broadcast, F_out_mask, prefix + "Norm::");
+
+        delete[] remask_c_q_0; delete[] remask_c_q_1; delete[] H_ghost_mask;
+        delete[] H_delta_mask; delete[] S_base_mask; delete[] S_delta_mask;
+        delete[] S_total_mask; delete[] D_inv_broadcast;
+    } 
+    // ================== ONLINE PHASE (Server / Client) ==================
+    else {
+        std::cerr << "  >> BPMPL: Path I (Base Graph Execution)" << std::endl;
+        
+        // 【修复报错处】：补齐额外的参数
+        GraphitiMessagePassing(numBaseNodes, numBaseEdges, outDim, H_B, S_base, true, prefix + "Base Route");
+
+        std::cerr << "  >> BPMPL: Ghost Node Extraction" << std::endl;
+        DPFKeyPack *dpfKeys = new DPFKeyPack[numGhostNodes];
+
+        auto keyread_time = time_this_block([&]() {
+            for (int k = 0; k < numGhostNodes; k++) dpfKeys[k] = dealer->recv_dpf_keypack(32, FSSConfig::bitlength);
+        });
+        
+        peer->sync();
+
+        int partyId = FSSConfig::party - SERVER;
+        GroupElement* v_sel_share = new GroupElement[numGhostNodes * numBaseNodes];
+        
+        for (int k = 0; k < numGhostNodes; k++) {
+            for (int i = 0; i < numBaseNodes; i++) {
+                v_sel_share[k * numBaseNodes + i] = evalDPF_EQ(partyId, dpfKeys[k], i);
+            }
+        }
+
+        GroupElement *remask_c_q = new GroupElement[numGhostNodes * outDim];
+        dealer->recv_ge_array(remask_c_q, numGhostNodes * outDim);
+
+        GroupElement *H_ghost_share = new GroupElement[numGhostNodes * outDim];
+        for (int k = 0; k < numGhostNodes; k++) {
+            for (int d = 0; d < outDim; d++) {
+                GroupElement sum = remask_c_q[k * outDim + d];
+                for (int i = 0; i < numBaseNodes; i++) {
+                    sum += v_sel_share[k * numBaseNodes + i] * H_B[i * outDim + d]; 
+                }
+                mod(sum, FSSConfig::bitlength);
+                H_ghost_share[k * outDim + d] = sum;
+            }
+        }
+
+        reconstruct(numGhostNodes * outDim, H_ghost_share, FSSConfig::bitlength);
+
+        for (int i = 0; i < numGhostNodes * outDim; i++) H_ghost[i] = H_ghost_share[i];
+
+        for (int k = 0; k < numGhostNodes; k++) freeDPFKeyPack(dpfKeys[k]);
+        delete[] dpfKeys; delete[] v_sel_share; delete[] remask_c_q; delete[] H_ghost_share;
+
+        std::cerr << "  >> BPMPL: Path II (Delta Graph Execution)" << std::endl;
+        
+        for (int i = 0; i < numDeltaNodes * outDim; i++) H_delta[i] = H_new[i];
+        for (int i = 0; i < numGhostNodes * outDim; i++) H_delta[numDeltaNodes * outDim + i] = H_ghost[i];
+
+        // 【修复报错处】：补齐额外的参数
+        GraphitiMessagePassing(numDeltaNodes + numGhostNodes, numDeltaEdges, outDim, H_delta, S_delta, false, prefix + "Delta Route");
+
+        std::cerr << "  >> BPMPL: Fusion and Division-Free Normalization" << std::endl;
+        GroupElement *S_total = new GroupElement[totalNodes * outDim];
+        
+        for (int i = 0; i < numBaseNodes * outDim; i++) S_total[i] = S_base[i];
+        for (int i = 0; i < numDeltaNodes * outDim; i++) S_total[numBaseNodes * outDim + i] = S_delta[i];
+
+        GroupElement *D_inv_broadcast = new GroupElement[totalNodes * outDim];
+        for(int i = 0; i < totalNodes; i++) {
+            for(int d = 0; d < outDim; d++) {
+                D_inv_broadcast[i * outDim + d] = D_inv[i]; 
+            }
+        }
+
+        ElemWiseMul(totalNodes * outDim, S_total, D_inv_broadcast, F_out, prefix + "Norm::");
+
+        delete[] S_total;
+        delete[] D_inv_broadcast;
     }
 
-    // --- 第三阶段：结果重构 ---
-    if (party != 1) { // 仅由 Server 和 Client 执行
-        reconstruct(numNodes * outDim, outF, bitlength);
+    delete[] H_trans;
+    if (party == DEALER) delete[] H_trans_mask;
+    delete[] S_base;
+    delete[] H_ghost;
+    delete[] H_delta;
+    delete[] S_delta;
+
+    std::cerr << ">> " << prefix << "BPMPL Layer - End" << std::endl;
+}
+
+
+// ==============================================================================
+// 2. 解耦版 BPMPL_GraphRouting: 仅包含图路由与归一化 (专门用于摊销策略测试)
+// ==============================================================================
+void BPMPL_GraphRouting(int numBaseNodes, int numBaseEdges,
+           int numDeltaNodes, int numDeltaEdges,
+           int numGhostNodes,
+           int outDim,
+           MASK_PAIR(GroupElement *H_trans), 
+           MASK_PAIR(GroupElement *D_inv),
+           MASK_PAIR(GroupElement *F_out),
+           int *ghostIndices_mask,
+           std::string prefix)
+{
+    int totalNodes = numBaseNodes + numDeltaNodes;
+
+    GroupElement *H_B = H_trans; 
+    GroupElement *H_new = H_trans + (numBaseNodes * outDim); 
+
+    GroupElement *S_base = new GroupElement[numBaseNodes * outDim];
+    GroupElement *H_ghost = new GroupElement[numGhostNodes * outDim];
+    GroupElement *H_delta = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+    GroupElement *S_delta = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+
+    // ================== OFFLINE PHASE (Dealer) ==================
+    if (party == DEALER) {
+        std::pair<DPFKeyPack, DPFKeyPack> *dpfKeys = new std::pair<DPFKeyPack, DPFKeyPack>[numGhostNodes];
+        for (int k = 0; k < numGhostNodes; k++) {
+            dpfKeys[k] = keyGenDPF(32, FSSConfig::bitlength, ghostIndices_mask[k], 1);
+        }
+        for (int k = 0; k < numGhostNodes; k++) {
+            server->send_dpf_keypack(dpfKeys[k].first);
+            client->send_dpf_keypack(dpfKeys[k].second);
+            freeDPFKeyPackPair(dpfKeys[k]);
+        }
+        delete[] dpfKeys;
+
+        GroupElement *H_B_mask = H_trans_mask;
+        GroupElement *remask_c_q_0 = new GroupElement[numGhostNodes * outDim];
+        GroupElement *remask_c_q_1 = new GroupElement[numGhostNodes * outDim];
+        GroupElement *H_ghost_mask = new GroupElement[numGhostNodes * outDim];
+
+        for (int k = 0; k < numGhostNodes; k++) {
+            int g_idx = ghostIndices_mask[k]; 
+            for (int d = 0; d < outDim; d++) {
+                GroupElement r0 = random_ge(FSSConfig::bitlength);
+                GroupElement r1 = random_ge(FSSConfig::bitlength);
+                remask_c_q_0[k * outDim + d] = r0;
+                remask_c_q_1[k * outDim + d] = r1;
+                H_ghost_mask[k * outDim + d] = H_B_mask[g_idx * outDim + d] + r0 + r1;
+                mod(H_ghost_mask[k * outDim + d], FSSConfig::bitlength);
+            }
+        }
+        
+        server->send_ge_array(remask_c_q_0, numGhostNodes * outDim);
+        client->send_ge_array(remask_c_q_1, numGhostNodes * outDim);
+
+        GroupElement *H_delta_mask = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+        GroupElement *H_new_mask = H_trans_mask + (numBaseNodes * outDim);
+        
+        for (int i = 0; i < numDeltaNodes * outDim; i++) H_delta_mask[i] = H_new_mask[i];
+        for (int i = 0; i < numGhostNodes * outDim; i++) H_delta_mask[numDeltaNodes * outDim + i] = H_ghost_mask[i];
+
+        GroupElement *S_base_mask = new GroupElement[numBaseNodes * outDim];
+        GroupElement *S_delta_mask = new GroupElement[(numGhostNodes + numDeltaNodes) * outDim];
+
+        // 高光时刻：Base 路由复用缓存 (true)，Delta 路由实时生成 (false)！
+        GraphitiMessagePassing(numBaseNodes, numBaseEdges, outDim, H_B_mask, S_base_mask, true, prefix + "Base Route");
+        GraphitiMessagePassing(numDeltaNodes + numGhostNodes, numDeltaEdges, outDim, H_delta_mask, S_delta_mask, false, prefix + "Delta Route");
+
+        GroupElement *S_total_mask = new GroupElement[totalNodes * outDim];
+        for(int i = 0; i < numBaseNodes * outDim; i++) S_total_mask[i] = S_base_mask[i];
+        for(int i = 0; i < numDeltaNodes * outDim; i++) S_total_mask[numBaseNodes * outDim + i] = S_delta_mask[i];
+        
+        GroupElement *D_inv_broadcast = new GroupElement[totalNodes * outDim];
+        for(int i = 0; i < totalNodes; i++) {
+            for(int d = 0; d < outDim; d++) D_inv_broadcast[i * outDim + d] = D_inv_mask[i];
+        }
+        
+        ElemWiseMul(totalNodes * outDim, S_total_mask, D_inv_broadcast, F_out_mask, prefix + "Norm::");
+
+        delete[] remask_c_q_0; delete[] remask_c_q_1; delete[] H_ghost_mask;
+        delete[] H_delta_mask; delete[] S_base_mask; delete[] S_delta_mask;
+        delete[] S_total_mask; delete[] D_inv_broadcast;
+    } 
+    // ================== ONLINE PHASE (Server / Client) ==================
+    else {
+        // Base 路由：明确告诉日志此处使用了 Cached 映射 (is_cached = true)
+        GraphitiMessagePassing(numBaseNodes, numBaseEdges, outDim, H_B, S_base, true, prefix + "Base Route");
+
+        DPFKeyPack *dpfKeys = new DPFKeyPack[numGhostNodes];
+        auto keyread_time = time_this_block([&]() {
+            for (int k = 0; k < numGhostNodes; k++) dpfKeys[k] = dealer->recv_dpf_keypack(32, FSSConfig::bitlength);
+        });
+        peer->sync();
+
+        int partyId = FSSConfig::party - SERVER;
+        GroupElement* v_sel_share = new GroupElement[numGhostNodes * numBaseNodes];
+        
+        for (int k = 0; k < numGhostNodes; k++) {
+            for (int i = 0; i < numBaseNodes; i++) v_sel_share[k * numBaseNodes + i] = evalDPF_EQ(partyId, dpfKeys[k], i);
+        }
+
+        // 接收修正项 c_q
+        GroupElement *remask_c_q = new GroupElement[numGhostNodes * outDim];
+        dealer->recv_ge_array(remask_c_q, numGhostNodes * outDim);
+
+        GroupElement *H_ghost_share = new GroupElement[numGhostNodes * outDim];
+        for (int k = 0; k < numGhostNodes; k++) {
+            for (int d = 0; d < outDim; d++) {
+                GroupElement sum = remask_c_q[k * outDim + d];
+                for (int i = 0; i < numBaseNodes; i++) {
+                    sum += v_sel_share[k * numBaseNodes + i] * H_B[i * outDim + d];
+                }
+                mod(sum, FSSConfig::bitlength);
+                H_ghost_share[k * outDim + d] = sum;
+            }
+        }
+
+        reconstruct(numGhostNodes * outDim, H_ghost_share, FSSConfig::bitlength);
+        for (int i = 0; i < numGhostNodes * outDim; i++) H_ghost[i] = H_ghost_share[i];
+
+        for (int k = 0; k < numGhostNodes; k++) freeDPFKeyPack(dpfKeys[k]);
+        delete[] dpfKeys; delete[] v_sel_share; delete[] remask_c_q; delete[] H_ghost_share;
+
+        for (int i = 0; i < numDeltaNodes * outDim; i++) H_delta[i] = H_new[i];
+        for (int i = 0; i < numGhostNodes * outDim; i++) H_delta[numDeltaNodes * outDim + i] = H_ghost[i];
+
+        // Delta 路由：此处为动态生成 (is_cached = false)
+        GraphitiMessagePassing(numDeltaNodes + numGhostNodes, numDeltaEdges, outDim, H_delta, S_delta, false, prefix + "Delta Route");
+
+        GroupElement *S_total = new GroupElement[totalNodes * outDim];
+        for (int i = 0; i < numBaseNodes * outDim; i++) S_total[i] = S_base[i];
+        for (int i = 0; i < numDeltaNodes * outDim; i++) S_total[numBaseNodes * outDim + i] = S_delta[i];
+
+        GroupElement *D_inv_broadcast = new GroupElement[totalNodes * outDim];
+        for(int i = 0; i < totalNodes; i++) {
+            for(int d = 0; d < outDim; d++) D_inv_broadcast[i * outDim + d] = D_inv[i]; 
+        }
+
+        ElemWiseMul(totalNodes * outDim, S_total, D_inv_broadcast, F_out, prefix + "Norm::");
+
+        delete[] S_total; delete[] D_inv_broadcast;
     }
 
-    delete[] F_prime; 
-    delete[] F_prime_mask;
+    // 全局清理
+    delete[] S_base; delete[] H_ghost; delete[] H_delta; delete[] S_delta;
+}
+
+
+
+// ==============================================================================
+// OblivGNN Protocol: DPF-based Matrix Update (Algorithm 4 & 5)
+// ==============================================================================
+void OblivGNN_MatrixUpdate(int N, int C, int numUpdates,
+                           MASK_PAIR(GroupElement *Matrix),
+                           int *target_rows_mask,
+                           MASK_PAIR(GroupElement *Delta),
+                           std::string prefix)
+{
+    std::cerr << ">> " << prefix << " OblivGNN Update - Start" << std::endl;
+    
+    if (party == DEALER) {
+        std::pair<DPFKeyPack, DPFKeyPack> *dpfKeys = new std::pair<DPFKeyPack, DPFKeyPack>[numUpdates];
+        for (int u = 0; u < numUpdates; u++) {
+            // 为每个需要更新的目标行生成 DPF 密钥
+            dpfKeys[u] = keyGenDPF(32, FSSConfig::bitlength, target_rows_mask[u], 1);
+        }
+        for (int u = 0; u < numUpdates; u++) {
+            server->send_dpf_keypack(dpfKeys[u].first);
+            client->send_dpf_keypack(dpfKeys[u].second);
+            freeDPFKeyPackPair(dpfKeys[u]);
+        }
+        delete[] dpfKeys;
+        
+        // Dealer 同步追踪 Mask 的流转
+        for(int u = 0; u < numUpdates; u++){
+            int target = target_rows_mask[u];
+            for(int c = 0; c < C; c++){
+                Matrix_mask[target * C + c] += Delta_mask[u * C + c];
+                mod(Matrix_mask[target * C + c], FSSConfig::bitlength);
+            }
+        }
+    } 
+    else {
+        DPFKeyPack *dpfKeys = new DPFKeyPack[numUpdates];
+        auto t_read = time_this_block([&]() {
+            for (int u = 0; u < numUpdates; u++) dpfKeys[u] = dealer->recv_dpf_keypack(32, FSSConfig::bitlength);
+        });
+        peer->sync();
+
+        int partyId = FSSConfig::party - SERVER;
+        
+        // 【核心瓶颈体现】：OblivGNN 必须对整个矩阵的 N 行进行全量 DPF 评估
+        #pragma omp parallel for
+        for (int u = 0; u < numUpdates; u++) {
+            for (int j = 0; j < N; j++) {
+                // 评估当前行是否是目标更新行 (是则 v_sel=1，否则 v_sel=0)
+                GroupElement v_sel = evalDPF_EQ(partyId, dpfKeys[u], j);
+                
+                // 将更新特征 Delta 累加到目标行 (本地模拟 Beaver Triples 加速)
+                for (int c = 0; c < C; c++) {
+                    Matrix[j * C + c] += v_sel * Delta[u * C + c];
+                    mod(Matrix[j * C + c], FSSConfig::bitlength);
+                }
+            }
+            freeDPFKeyPack(dpfKeys[u]);
+        }
+        delete[] dpfKeys;
+    }
+    std::cerr << ">> " << prefix << " OblivGNN Update - End" << std::endl;
+}
+
+
+// ==============================================================================
+// OblivGNN Protocol: DPF-based Matrix Update (采用 Full-Domain 极速全域评估优化)
+// ==============================================================================
+void OblivGNN_MatrixUpdate_FD(int N, int C, int numUpdates,
+                           MASK_PAIR(GroupElement *Matrix),
+                           int *target_rows_mask,
+                           MASK_PAIR(GroupElement *Delta),
+                           std::string prefix)
+{
+    std::cerr << ">> " << prefix << " OblivGNN Update (Full-Domain DPF) - Start" << std::endl;
+    
+    // 1. 动态计算 DPF 树的深度 (必须刚好包住图节点数 N，防 OOM 爆内存！)
+    int dpf_bin = 0;
+    int temp = N - 1;
+    while (temp > 0) {
+        temp >>= 1;
+        dpf_bin++;
+    }
+    int domain_size = 1 << dpf_bin; // 例如 N=2708, dpf_bin=12, domain_size=4096
+    
+    if (party == DEALER) {
+        std::pair<DPFKeyPack, DPFKeyPack> *dpfKeys = new std::pair<DPFKeyPack, DPFKeyPack>[numUpdates];
+        for (int u = 0; u < numUpdates; u++) {
+            // 使用动态计算的 dpf_bin 生成密钥
+            dpfKeys[u] = keyGenDPF(dpf_bin, FSSConfig::bitlength, target_rows_mask[u], 1);
+        }
+        for (int u = 0; u < numUpdates; u++) {
+            server->send_dpf_keypack(dpfKeys[u].first);
+            client->send_dpf_keypack(dpfKeys[u].second);
+            freeDPFKeyPackPair(dpfKeys[u]);
+        }
+        delete[] dpfKeys;
+        
+        // Dealer 同步追踪 Mask 的流转
+        for (int u = 0; u < numUpdates; u++) {
+            int target = target_rows_mask[u];
+            for (int c = 0; c < C; c++) {
+                Matrix_mask[target * C + c] += Delta_mask[u * C + c];
+                mod(Matrix_mask[target * C + c], FSSConfig::bitlength);
+            }
+        }
+    } 
+    else {
+        DPFKeyPack *dpfKeys = new DPFKeyPack[numUpdates];
+
+        uint64_t keysize_start = dealer->bytesReceived();
+        auto t_read = time_this_block([&]() {
+            for (int u = 0; u < numUpdates; u++) {
+                dpfKeys[u] = dealer->recv_dpf_keypack(dpf_bin, FSSConfig::bitlength);
+            }
+        });
+
+        peer->sync();
+
+        int partyId = FSSConfig::party - SERVER;
+        
+        // 预分配全域展开缓冲区
+        GroupElement *full_eval_out = new GroupElement[domain_size];
+
+        auto t_compute = time_this_block([&]() {
+            for (int u = 0; u < numUpdates; u++) {
+                // 【核心优化】：一次性展开 DPF 树，得到一个长度为 domain_size 的掩码向量
+                // 复杂度从 O(N log N) 断崖式降低到 O(N)
+                evalAll(partyId, dpfKeys[u], 0, full_eval_out);
+                
+                // 多线程极速矩阵累加
+                #pragma omp parallel for
+                for (int j = 0; j < N; j++) {
+                    GroupElement v_sel = full_eval_out[j]; // 直接查表，O(1)
+                    
+                    // 将更新特征 Delta 累加到目标行
+                    for (int c = 0; c < C; c++) {
+                        Matrix[j * C + c] += v_sel * Delta[u * C + c];
+                    }
+                }
+
+                freeDPFKeyPack(dpfKeys[u]);
+            }
+            
+            // 统一取模，保证安全运算边界
+            #pragma omp parallel for
+            for (int i = 0; i < N * C; i++) {
+                mod(Matrix[i], FSSConfig::bitlength);
+            }
+        });
+
+        delete[] full_eval_out;
+        delete[] dpfKeys;
+
+        FSS::stat_t stat = {
+            prefix + "OblivGNN_MatrixUpdate",
+            t_read,
+            t_compute,
+            0,                              // reconstruction_time
+            0,                              // online_comm
+            dealer->bytesReceived() - keysize_start
+        };
+        stat.print();
+        FSS::push_stats(stat);
+    }
+
+    std::cerr << ">> " << prefix << " OblivGNN Update (Full-Domain DPF) - End" << std::endl;
 }

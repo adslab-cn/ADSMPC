@@ -225,6 +225,9 @@ public:
 
     void send_dpfet_keypack(const DPFETKeyPack &kp);
 
+    // 发送 GTDCF 密钥 
+    void send_GTDCF_key(const GTDCFKeyPack &kp);
+
     void send_ddcf_keypack(const DualDCFKeyPack &kp);
 
     void send_relu_key(const ReluKeyPack &kp);
@@ -299,23 +302,6 @@ public:
 
     void recv_uint8_array(uint8_t *data, int size);
 
-    // FastSecNetrelu_key
-    void send_FastSecNetrelu_key(const FastSecNetReluKeyPack &kp);
-
-    // NewDrelu_key
-    void send_new_drelu_key(const NewDreluKeyPack &kp);
-
-    // OblivGnnRelu_key
-    void send_obliv_relu_key(const OblivReLUKeyPack &kp);
-
-    // OblivSoftmax_key
-    void send_obliv_softmax_key(const OblivSoftmaxKeyPack &kp, int bl, int m, int sf);
-
-
-    // Graphiti
-    void send_shuffle_key(const ShuffleKeyPack &k);
-    void send_graphiti_key(const GraphitiKeyPack &k);
-
     
     void sync();
 
@@ -373,6 +359,9 @@ public:
     DPFKeyPack recv_dpf_keypack(int bin, int bout);
 
     DPFETKeyPack recv_dpfet_keypack(int bin);
+
+    // 接收 GTDCF 密钥
+    GTDCFKeyPack recv_GTDCF_key(int bin, int w, int groupSize);
 
     DualDCFKeyPack recv_ddcf_keypack(int Bin, int Bout, int groupSize);
 
@@ -462,22 +451,5 @@ public:
 
     SlothSignExtendKeyPack recv_sloth_sign_extend_key(int bin, int bout);
     
-    // FastSecNetrelu_key
-    FastSecNetReluKeyPack recv_FastSecNetrelu_key(int Bin, int Bout);
-
-    // NewDrelu_key
-    NewDreluKeyPack recv_newdrelu_key(int bin);
-
-    // OblivGnnRelu_key
-    OblivReLUKeyPack recv_obliv_relu_key(int Bin, int Bout);
-    // OblivSoftmax_key
-    OblivSoftmaxKeyPack recv_obliv_softmax_key(int Bin, int Bout, int s1, int s2, int m, int sf);
-
-    ShuffleKeyPack recv_shuffle_key();
-    GraphitiKeyPack recv_graphiti_key();
-
-    // CryptGNN
-    CryptMPLKeyPack recv_cryptmpl_key(int bin, int N, int K);
-
     
 };

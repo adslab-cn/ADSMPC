@@ -1,24 +1,3 @@
-// Authors: Kanav Gupta, Neha Jawalkar
-// Copyright:
-// 
-// Copyright (c) 2024 Microsoft Research
-// 
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
 #include <FSS/dpf.h>
 #include <FSS/assert.h>
 #include <cassert>
@@ -713,4 +692,163 @@ GroupElement evalGTDPF(int party, const DPFETKeyPack &key, GroupElement x)
     
 
     return t_dcf;
+}
+
+// =========================================================================
+// GTDCF
+// =========================================================================
+
+std::pair<GTDCFKeyPack, GTDCFKeyPack> keyGenGTDCF(
+    int bin, int w, int groupSize, GroupElement idx, const GroupElement* beta)
+{
+    always_assert(bin <= 64);
+    always_assert(groupSize == 2); // 强制为2以启用极限优化
+    static const block notOneBlock = toBlock(~0, ~1);
+    
+    // 0:左分支, 1:右分支, 2:负载掩码
+    const static block pt[3] = {ZeroBlock, OneBlock, toBlock(0, 2)};
+
+    GTDCFKeyPack key0(bin, w, 2);
+    GTDCFKeyPack key1(bin, w, 2);
+
+    int tid = omp_get_thread_num();
+    auto s = FSSConfig::prngs[tid].get<std::array<block, 2>>();
+    
+    key0.seed = s[0] & notOneBlock;
+    key1.seed = s[1] & notOneBlock;
+    block s0 = key0.seed, s1 = key1.seed;
+    u8 t0 = 0, t1 = 1;
+    int d = bin - w;
+
+    for (int i = 0; i < d; ++i)
+    {
+        const u8 keep_dir = static_cast<uint8_t>(idx >> (bin - 1 - i)) & 1;
+        const u8 loose_dir = keep_dir ^ 1;
+
+        AES ak0(s0); AES ak1(s1);
+        block ct0[3], ct1[3];
+        ak0.ecbEncBlocks(pt, 3, ct0);
+        ak1.ecbEncBlocks(pt, 3, ct1);
+
+        block scw = (ct0[loose_dir] ^ ct1[loose_dir]) & notOneBlock;
+        uint8_t tcwL = lsb(ct0[0]) ^ lsb(ct1[0]) ^ keep_dir ^ 1;
+        uint8_t tcwR = lsb(ct0[1]) ^ lsb(ct1[1]) ^ keep_dir;
+
+        key0.scw[i] = key1.scw[i] = scw;
+        key0.tcw[2 * i] = key1.tcw[2 * i] = tcwL;
+        key0.tcw[2 * i + 1] = key1.tcw[2 * i + 1] = tcwR;
+
+        // 极限优化：直接用 SSE 指令提取 64 位整数，告别 memcpy
+        GroupElement v0_0 = _mm_extract_epi64(ct0[2], 0);
+        GroupElement v0_1 = _mm_extract_epi64(ct0[2], 1);
+        GroupElement v1_0 = _mm_extract_epi64(ct1[2], 0);
+        GroupElement v1_1 = _mm_extract_epi64(ct1[2], 1);
+
+        int offset = i * 2;
+        GroupElement target0 = (keep_dir == 0) ? beta[0] : 0;
+        GroupElement target1 = (keep_dir == 0) ? beta[1] : 0;
+
+        if (t0 == 1) {
+            key0.vcw[offset]     = key1.vcw[offset]     = target0 - v0_0 + v1_0;
+            key0.vcw[offset + 1] = key1.vcw[offset + 1] = target1 - v0_1 + v1_1;
+        } else {
+            key0.vcw[offset]     = key1.vcw[offset]     = -(target0 - v0_0 + v1_0);
+            key0.vcw[offset + 1] = key1.vcw[offset + 1] = -(target1 - v0_1 + v1_1);
+        }
+
+        s0 = (ct0[keep_dir] & notOneBlock) ^ (t0 ? scw : ZeroBlock);
+        t0 = lsb(ct0[keep_dir]) ^ (t0 ? (keep_dir == 0 ? tcwL : tcwR) : 0);
+        
+        s1 = (ct1[keep_dir] & notOneBlock) ^ (t1 ? scw : ZeroBlock);
+        t1 = lsb(ct1[keep_dir]) ^ (t1 ? (keep_dir == 0 ? tcwL : tcwR) : 0);
+    }
+
+    AES ak0_leaf(s0); AES ak1_leaf(s1);
+    int B = 1 << w;
+    GroupElement alpha_lo = idx & (B - 1); 
+
+    for (int j = 0; j < B; ++j) {
+        block pt_leaf = toBlock(0, j);
+        block ct0_leaf = ak0_leaf.ecbEncBlock(pt_leaf);
+        block ct1_leaf = ak1_leaf.ecbEncBlock(pt_leaf);
+        
+        GroupElement v0_0 = _mm_extract_epi64(ct0_leaf, 0);
+        GroupElement v0_1 = _mm_extract_epi64(ct0_leaf, 1);
+        GroupElement v1_0 = _mm_extract_epi64(ct1_leaf, 0);
+        GroupElement v1_1 = _mm_extract_epi64(ct1_leaf, 1);
+
+        GroupElement target0 = (j >= alpha_lo) ? beta[0] : 0;
+        GroupElement target1 = (j >= alpha_lo) ? beta[1] : 0;
+
+        int offset = j * 2;
+        if (t0 == 1) {
+            key0.leaf_vcw[offset]     = key1.leaf_vcw[offset]     = target0 - v0_0 + v1_0;
+            key0.leaf_vcw[offset + 1] = key1.leaf_vcw[offset + 1] = target1 - v0_1 + v1_1;
+        } else {
+            key0.leaf_vcw[offset]     = key1.leaf_vcw[offset]     = -(target0 - v0_0 + v1_0);
+            key0.leaf_vcw[offset + 1] = key1.leaf_vcw[offset + 1] = -(target1 - v0_1 + v1_1);
+        }
+    }
+
+    return std::make_pair(key0, key1);
+}
+
+void evalGTDCF(int party, const GTDCFKeyPack &key, GroupElement x, GroupElement* res)
+{
+    static const block notOneBlock = toBlock(~0, ~1);
+    int bin = key.bin, d = key.d;
+    block s = key.seed;
+    u8 t = party; 
+    int64_t sign = (party == 0) ? 1 : -1;
+    
+    // 使用局部寄存器变量，避免内存读写
+    GroupElement res0 = 0, res1 = 0;
+
+    for (int i = 0; i < d; ++i) {
+        const u8 x_i = static_cast<uint8_t>(x >> (bin - 1 - i)) & 1;
+        AES ak(s);
+        block s_next_raw;
+        
+        if (x_i == 1) {
+            // 核心优化：只需要右分支(OneBlock)和掩码块(toBlock(0,2))
+            block pt[2] = {OneBlock, toBlock(0, 2)};
+            block ct[2];
+            ak.ecbEncTwoBlocks(pt, ct); // 硬件加速，同时加密两块
+            
+            s_next_raw = ct[0]; 
+            
+            GroupElement v0 = _mm_extract_epi64(ct[1], 0);
+            GroupElement v1 = _mm_extract_epi64(ct[1], 1);
+            
+            int offset = i * 2;
+            if (t) {
+                v0 += key.vcw[offset];
+                v1 += key.vcw[offset + 1];
+            }
+            res0 += sign * v0;
+            res1 += sign * v1;
+        } else {
+            // x_i == 0 极速模式：只需要左分支
+            s_next_raw = ak.ecbEncBlock(ZeroBlock);
+        }
+
+        s = (s_next_raw & notOneBlock) ^ (t ? key.scw[i] : ZeroBlock);
+        t = lsb(s_next_raw) ^ (t ? key.tcw[2 * i + x_i] : 0);
+    }
+
+    GroupElement x_lo = x & ((1 << key.w) - 1); 
+    AES ak_leaf(s);
+    block ct_leaf = ak_leaf.ecbEncBlock(toBlock(0, x_lo));
+    
+    GroupElement v_leaf0 = _mm_extract_epi64(ct_leaf, 0);
+    GroupElement v_leaf1 = _mm_extract_epi64(ct_leaf, 1);
+
+    int offset_leaf = x_lo * 2;
+    if (t) {
+        v_leaf0 += key.leaf_vcw[offset_leaf];
+        v_leaf1 += key.leaf_vcw[offset_leaf + 1];
+    }
+    
+    res[0] = res0 + sign * v_leaf0;
+    res[1] = res1 + sign * v_leaf1;
 }

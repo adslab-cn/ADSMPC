@@ -1765,140 +1765,28 @@ void Peer::send_sloth_sign_extend_key(const SlothSignExtendKeyPack &kp)
     send_ge(kp.select, kp.bout);
 }
 
-
-// send_FastSecNetrelu_key   
-void Peer::send_FastSecNetrelu_key(const FastSecNetReluKeyPack &kp)
-{
-    int Bin = kp.Bin;
-    int groupSize = 2;
-    send_dcf_keypack(kp.dcfKey);
-    send_ge(kp.r, kp.Bin);
-    send_ge(kp.b0, kp.Bin);
-    send_ge(kp.b1, kp.Bin);
-    send_ge(kp.rout, kp.Bin);
-
+// GTDCF ==================================================================
+void Peer::send_GTDCF_key(const GTDCFKeyPack &kp) {
+    int d = kp.d;
+    int B = 1 << kp.w;
+    send_block(kp.seed);
+    for (int i = 0; i < d; ++i) send_block(kp.scw[i]);
+    send_uint8_array(kp.tcw, 2 * d);
+    send_ge_array(kp.vcw, d * kp.groupSize);
+    send_ge_array(kp.leaf_vcw, B * kp.groupSize);
+    send_ge(kp.rout_share, kp.bin);
 }
 
-// recv_FastSecNetrelu_key
-FastSecNetReluKeyPack Dealer::recv_FastSecNetrelu_key(int Bin, int Bout)
-{
-    FastSecNetReluKeyPack kp;
-    kp.Bin = Bin;
-    kp.Bout = Bout;
-    kp.dcfKey = recv_dcf_keypack(kp.Bin, kp.Bout, 2);
-    kp.r = recv_ge(Bin);
-    kp.b0 = recv_ge(Bin);
-    kp.b1 = recv_ge(Bin);
-    kp.rout = recv_ge(Bin);
+GTDCFKeyPack Dealer::recv_GTDCF_key(int bin, int w, int groupSize) {
+    GTDCFKeyPack kp(bin, w, groupSize);
+    int d = kp.d;
+    int B = 1 << w;
+    kp.seed = recv_block();
+    for (int i = 0; i < d; ++i) kp.scw[i] = recv_block();
+    this->keyBuf->read((char *)kp.tcw, 2 * d);
+    this->keyBuf->read((char *)kp.vcw, d * groupSize * sizeof(GroupElement));
+    this->keyBuf->read((char *)kp.leaf_vcw, B * groupSize * sizeof(GroupElement));
+    kp.rout_share = recv_ge(bin);
     return kp;
-}
-
-// send_new_drelu_key
-void Peer::send_new_drelu_key(const NewDreluKeyPack &kp)
-{
-    send_dpfet_keypack(kp.dpfKey);
-    send_ge(kp.r, 1);
-}
-
-// recv_new_drelu_key
-NewDreluKeyPack Dealer::recv_newdrelu_key(int bin)
-{
-    NewDreluKeyPack kp;
-    kp.bin = bin;
-    kp.dpfKey = recv_dpfet_keypack(bin - 1);
-    kp.r = recv_ge(1);
-    return kp;
-}
-
-
-
-// // send_obliv_relu_key
-// void Peer::send_obliv_relu_key(const OblivReLUKeyPack &kp) {
-//     send_dcf_keypack(kp.dpfKey);
-//     send_mult_key(kp.multKey);
-//     send_ge(kp.r_cmp, 1); // bool share
-//     send_ge(kp.r_out, kp.Bout);
-// }
-
-// // recv_obliv_relu_key
-// OblivReLUKeyPack Dealer::recv_obliv_relu_key(int Bin, int Bout) {
-//     OblivReLUKeyPack kp;
-//     kp.Bin = Bin; kp.Bout = Bout;
-//     kp.dcfKey = recv_dcf_keypack(Bin, 1, 1);
-//     kp.multKey = recv_mult_key();
-//     kp.r_cmp = recv_ge(1);
-//     kp.r_out = recv_ge(Bout);
-//     return kp;
-// }
-
-// // send_obliv_softmax_key
-// void Peer::send_obliv_softmax_key(const OblivSoftmaxKeyPack &kp, int bl, int m, int sf) {
-//     int size_total = kp.s1 * kp.s2;
-//     int size_batch = kp.s1;
-    
-//     for(int i=0; i<size_total; ++i) send_obliv_relu_key(kp.reluKeys[i]);
-//     for(int i=0; i<size_batch; ++i) send_taylor_key(kp.inverseKeys[i], bl, m);
-//     for(int i=0; i<size_batch; ++i) {
-//         send_dcf_keypack(kp.sumCheckKeys[i]);
-//         send_ge(kp.r_sumCheck[i], 1);
-//         send_select_key(kp.selectKeys[i]);
-//     }
-//     for(int i=0; i<size_total; ++i) send_mult_key(kp.finalMultKeys[i]);
-// }
-
-// // recv_obliv_softmax_key
-// OblivSoftmaxKeyPack Dealer::recv_obliv_softmax_key(int Bin, int Bout, int s1, int s2, int m, int sf) {
-//     OblivSoftmaxKeyPack kp;
-//     kp.Bin = Bin; kp.Bout = Bout; kp.s1 = s1; kp.s2 = s2;
-    
-//     kp.reluKeys = new OblivReLUKeyPack[s1 * s2];
-//     for(int i=0; i<s1 * s2; ++i) kp.reluKeys[i] = recv_obliv_relu_key(Bin, Bout);
-    
-//     kp.inverseKeys = new TaylorKeyPack[s1];
-//     for(int i=0; i<s1; ++i) kp.inverseKeys[i] = recv_taylor_key(Bout, m, sf);
-    
-//     kp.sumCheckKeys = new DCFKeyPack[s1];
-//     kp.r_sumCheck = new GroupElement[s1];
-//     kp.selectKeys = new SelectKeyPack[s1];
-//     for(int i=0; i<s1; ++i) {
-//         kp.sumCheckKeys[i] = recv_dcf_keypack(Bin, 1, 1);
-//         kp.r_sumCheck[i] = recv_ge(1);
-//         kp.selectKeys[i] = recv_select_key(Bin); // Assuming selection happens on Bin width
-//     }
-    
-//     kp.finalMultKeys = new MultKey[s1 * s2];
-//     for(int i=0; i<s1 * s2; ++i) kp.finalMultKeys[i] = recv_mult_key();
-    
-//     return kp;
-// }
-
-
-
-void Peer::send_shuffle_key(const ShuffleKeyPack &k) {
-    this->keyBuf->write((char*)&k.size, sizeof(int));
-}
-
-ShuffleKeyPack Dealer::recv_shuffle_key() {
-    ShuffleKeyPack k;
-    this->keyBuf->read((char*)&k.size, sizeof(int));
-    return k;
-}
-
-void Peer::send_graphiti_key(const GraphitiKeyPack &k) {
-    this->keyBuf->write((char*)&k.N, sizeof(int));
-    this->keyBuf->write((char*)&k.numNodes, sizeof(int));
-    send_shuffle_key(k.vToS);
-    send_shuffle_key(k.sToD);
-    send_shuffle_key(k.dToV);
-}
-
-GraphitiKeyPack Dealer::recv_graphiti_key() {
-    GraphitiKeyPack k;
-    this->keyBuf->read((char*)&k.N, sizeof(int));
-    this->keyBuf->read((char*)&k.numNodes, sizeof(int));
-    k.vToS = recv_shuffle_key();
-    k.sToD = recv_shuffle_key();
-    k.dToV = recv_shuffle_key();
-    return k;
 }
 
