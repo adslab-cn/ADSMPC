@@ -1,74 +1,155 @@
-## Introduction
-本项目是ADSLab整理和构建的MPC训练和推理框架
+# BPGNN Artifact
 
-## Architecture
-This repository has the following components:
-- **crypto**
-计算库核心部分
-    - FSS
-    函数秘密分享（Function Secret Share）的代码实现
-        - primitives
-        密码原语部分，包括DCF，更多FSS原语待添加，如DPF, DIF等
-        - protocol
-        方法协议部分，以FSS为基础实现的协议
-        - aux_parameter
-        辅助操作，包括密钥定义等
-        - api
-        协议评估以及与neural_networks之间的接口，方便网络对FSS后端进行调用
-    - ASS
-    加性秘密分享，待添加
+This repository contains the code and scripts for reproducing the main experimental results of **BPGNN**, a privacy-preserving framework for inductive GNN inference in the standard two-server setting.
 
-- **neural_networks**
-上层神经网络的训练和推理结构，调用底层
+## Overview
 
+The artifact includes:
 
-- **dataset**
-用于存放隐私保护神经网络推理的明文模型结构代码，以及应用所需的相关数据也可放在该文件夹下
+* the implementation of the BPGNN framework,
+* setup scripts for building the required environment,
+* executables for reproducing the main experiments in the paper.
 
+The framework is designed for a two-party setting and can be tested locally by simulating the client and the two servers on a single machine.
 
-- **tests**
-本项目的测试代码
+---
 
+## Environment Setup
 
-## SetUp
-项目本体使用以下指令即可安装
+### Platform
 
-可选参数: quick: 直接使用默认安装
+The framework is developed and tested on:
+
+* **Operating System:** Ubuntu 22.04 LTS
+
+### Build Dependencies
+
+The project uses **CMake 3.17 or higher**.
+
+To simplify installation, we provide an automated setup script that checks the local environment and installs or builds the required dependencies when needed.
+
+---
+
+## Automated Setup
+
+From the repository root, run:
 
 ```bash
-sudo ./1-base.sh quick
+sudo ./1-base.sh
 ```
 
-# Running Tests & Networks
+This script configures the environment automatically.
 
-**编译**
+---
+
+## Compilation
+
+After the environment is ready, compile the framework with standard CMake commands:
+
 ```bash
 mkdir build && cd build
 cmake ..
-make
+make -j
 ```
 
-编译完成后，将dataset文件夹中需要的数据集复制到创建的build文件夹中
+All generated binaries, including test and experiment executables, will be placed in the `build/` directory.
 
-**运行**
+---
 
-如果在本机测试，即tests下代码中ip地址设置为127.0.0.1，使用两个terminal模拟两台服务器
-Dealer：
+## Reproducing Experimental Results
+
+We provide executables corresponding to the key results reported in the paper.
+
+### Local Two-Party Execution
+
+The framework is designed to run over a network. For local testing, the client and the two servers can be simulated on the same machine.
+
+* Set the IP address in the source code to:
+
+```text
+127.0.0.1
+```
+
+### Network Setting Used in Our Experiments
+
+Our reported experiments were conducted in a simulated LAN environment with:
+
+* **Bandwidth:** 1 Gbps
+* **Latency:** 0.15 ms
+
+---
+
+## Running an Experiment
+
+To run an experiment, start three separate processes corresponding to:
+
+* the **client**,
+* **server 0**,
+* **server 1**.
+
+Below is the example for running the end-to-end BPGNN experiment.
+
+### Terminal 1: Client
+
 ```bash
-./CNN 1
+cd build/
+./BPGNN 1
 ```
 
-Server：
+### Terminal 2: Server 0
+
 ```bash
-./CNN 2
+cd build/
+./BPGNN 2
 ```
 
-Client：
+### Terminal 3: Server 1
+
 ```bash
-./CNN 3
+cd build/
+./BPGNN 3
 ```
 
-**Reference:** 
+---
+
+## Mapping from Paper Results to Source Files
+
+The following source files generate the main results in the paper.
+
+### Table: Microbenchmark of secure MPL under static and dynamic settings
+
+* **Source file:** `BPGNN.cpp`
+
+### Table: Online runtime of secure comparison paths
+
+* **Source file:** `comparison_primitive.cpp`
+
+### Table: Secure ReLU comparison
+
+* **Source file:** `GTDCF-ReLU.cpp`
+
+### Table: End-to-end performance under static and dynamic settings
+
+* **Source file:** `BPGNN.cpp`
+
+### Table: End-to-end breakdown
+
+* **Source file:** `BPGNN.cpp`
+
+---
+
+## Notes
+
+* The artifact is intended to provide a reproducible environment for verifying the implementation and evaluating the main experimental claims of the paper.
+* All experiments are run from the compiled binaries in `build/`.
+* For local testing, make sure that all three processes are launched in the correct order and that the configured IP address matches the local setup.
+
+---
+
+## Reproducibility Statement
+
+We provide this artifact to support verification of the reported results and to facilitate future research on privacy-preserving graph machine learning.
+
 
 [EzPC](https://github.com/mpc-msri/EzPC/)  
 [NssMPClib](https://github.com/XidianNSS/NssMPClib)  
