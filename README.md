@@ -1,4 +1,5 @@
-[# BPGNN Artifact
+[
+# BPGNN Artifact
 
 This repository contains the code and scripts for reproducing the main experimental results of **BPGNN**, a privacy-preserving framework for inductive GNN inference in the standard two-server setting.
 
