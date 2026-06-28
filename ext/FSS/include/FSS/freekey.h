@@ -1,0 +1,505 @@
+#pragma once
+
+#include <cryptoTools/Common/Defines.h>
+#include <FSS/comms.h>
+
+inline void freeDCFKeyPack(DCFKeyPack &key){
+    if (!FSSConfig::dealer->keyBuf->isMem()) {
+        delete[] key.k;
+    }
+    delete[] key.g;
+    delete[] key.v;
+}
+
+inline void freeDCFKeyPackPair(std::pair<DCFKeyPack, DCFKeyPack> &keys){
+    delete[] keys.first.k;
+    delete[] keys.second.k;
+    delete[] keys.first.g;
+    delete[] keys.first.v;
+}
+
+inline void freeDualDCFKeyPack(DualDCFKeyPack &key){
+    freeDCFKeyPack(key.dcfKey);
+    delete[] key.sb;
+}
+
+inline void freeDualDCFKeyPackPair(std::pair<DualDCFKeyPack, DualDCFKeyPack> &keys){
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+    delete[] keys.first.sb;
+    delete[] keys.second.sb;
+}
+
+inline void freeMatMulKey(MatMulKey &key){
+    delete[] key.a;
+    delete[] key.b;
+    delete[] key.c;
+}
+
+inline void freeMatMulKeyPair(std::pair<MatMulKey, MatMulKey> &keys){
+    delete[] keys.first.a;
+    delete[] keys.first.b;
+    delete[] keys.first.c;
+    delete[] keys.second.a;
+    delete[] keys.second.b;
+    delete[] keys.second.c;
+}
+
+inline void freeConv2dKey(Conv2DKey &key){
+    delete[] key.a;
+    delete[] key.b;
+    delete[] key.c;
+}
+
+inline void freeConv3dKey(Conv3DKey &key){
+    delete[] key.a;
+    delete[] key.b;
+    delete[] key.c;
+}
+
+inline void freeReluKeyPack(ReluKeyPack &key)
+{
+    if (!FSSConfig::dealer->keyBuf->isMem()) {
+        delete[] key.k;
+    }
+    delete[] key.g;
+    if (!(FSSConfig::dealer->keyBuf->isMem() && (key.Bout > 32))) {
+        delete[] key.v;
+    }
+}
+
+inline void freeReluKeyPackPair(std::pair<ReluKeyPack,ReluKeyPack> &keys)
+{
+    delete[] keys.first.k;
+    delete[] keys.second.k;
+    delete[] keys.first.g;
+    delete[] keys.first.v;
+    // other key shares g and v, dont delete again
+}
+
+inline void freeMaxpoolKeyPack(MaxpoolKeyPack &key)
+{
+    freeReluKeyPack(key.reluKey);
+}
+
+inline void freeMaxpoolKeyPackPair(std::pair<MaxpoolKeyPack,MaxpoolKeyPack> &keys)
+{
+    delete[] keys.first.reluKey.k;
+    delete[] keys.second.reluKey.k;
+    delete[] keys.first.reluKey.g;
+    delete[] keys.first.reluKey.v;
+}
+
+inline void freeARSKeyPack(ARSKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+    if (key.Bout > key.Bin - key.shift) {
+        freeDualDCFKeyPack(key.dualDcfKey);
+    }
+}
+inline void freeARSKeyPackPair(std::pair<ARSKeyPack, ARSKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+    if (keys.first.Bout > keys.first.Bin - keys.first.shift) {
+        delete[] keys.first.dualDcfKey.sb;
+        delete[] keys.second.dualDcfKey.sb;
+        delete[] keys.first.dualDcfKey.dcfKey.k;
+        delete[] keys.second.dualDcfKey.dcfKey.k;
+        delete[] keys.first.dualDcfKey.dcfKey.g;
+        delete[] keys.first.dualDcfKey.dcfKey.v;
+    }
+}
+
+inline void freeReluTruncateKeyPack( ReluTruncateKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKeyN);
+    freeDCFKeyPack(key.dcfKeyS);
+}
+
+inline void freeReluTruncateKeyPackPair(const std::pair<ReluTruncateKeyPack, ReluTruncateKeyPack> &keys)
+{
+    delete[] keys.first.dcfKeyN.k;
+    delete[] keys.second.dcfKeyN.k;
+    delete[] keys.first.dcfKeyN.g;
+    delete[] keys.first.dcfKeyN.v;
+
+    delete[] keys.first.dcfKeyS.k;
+    delete[] keys.second.dcfKeyS.k;
+    delete[] keys.first.dcfKeyS.g;
+    delete[] keys.first.dcfKeyS.v;
+}
+
+inline void freeRelu2RoundKeyPack(Relu2RoundKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+}
+
+inline void freeRelu2RoundKeyPackPair(const std::pair<Relu2RoundKeyPack, Relu2RoundKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+inline void freeSplineKey(SplineKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+    key.p.clear();
+    key.e_b.clear();
+    key.beta_b.clear();
+}
+
+inline void freeSplineKeyPair(std::pair<SplineKeyPack, SplineKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+    keys.first.p.clear();
+    keys.second.p.clear();
+    keys.first.e_b.clear();
+    keys.second.e_b.clear();
+    keys.first.beta_b.clear();
+    keys.second.beta_b.clear();
+}
+
+inline void freeMICKeyPack(MICKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+    delete[] key.z;
+}
+
+inline void freeMSNZBKeyPack(MSNZBKeyPack &key)
+{
+    freeMICKeyPack(key.micKey);
+}
+
+inline void freeBulkyLRSKeyPack(BulkyLRSKeyPack &key, int m)
+{
+    freeDCFKeyPack(key.dcfKeyN);
+    delete[] key.z;
+    for(int i = 0; i < m; i++) {
+        freeDCFKeyPack(key.dcfKeyS[i]);
+    }
+    delete[] key.dcfKeyS;
+}
+
+inline void freeTaylorKeyPack(TaylorKeyPack &key, int m)
+{
+    freeMSNZBKeyPack(key.msnzbKey);
+    freeBulkyLRSKeyPack(key.lrsKeys[0], m);
+    freeBulkyLRSKeyPack(key.lrsKeys[1], m);
+}
+
+inline void freeMaxpoolDoubleKeyPack(MaxpoolDoubleKeyPack &key)
+{
+    freeRelu2RoundKeyPack(key.reluKey);
+}
+
+inline void freeMaxpoolDoubleKeyPackPair(std::pair<MaxpoolDoubleKeyPack,MaxpoolDoubleKeyPack> &keys)
+{
+    delete[] keys.first.reluKey.dcfKey.k;
+    delete[] keys.second.reluKey.dcfKey.k;
+    delete[] keys.first.reluKey.dcfKey.g;
+    delete[] keys.first.reluKey.dcfKey.v;
+}
+
+inline void freeFixToFloatKeyPack(FixToFloatKeyPack &key)
+{
+    freeMICKeyPack(key.micKey);
+}
+
+inline void freeFixToFloatKeyPackPair(std::pair<FixToFloatKeyPack, FixToFloatKeyPack> &keys)
+{
+    delete[] keys.first.micKey.dcfKey.k;
+    delete[] keys.second.micKey.dcfKey.k;
+    delete[] keys.first.micKey.dcfKey.g;
+    delete[] keys.first.micKey.dcfKey.v;
+}
+
+inline void freeFloatToFixKeyPack(FloatToFixKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+}
+
+inline void freeFloatToFixKeyPackPair(std::pair<FloatToFixKeyPack, FloatToFixKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+inline void freeReluExtendKeyPack(ReluExtendKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+}
+
+inline void freeReluExtendKeyPackPair(std::pair<ReluExtendKeyPack, ReluExtendKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+inline void freeSignExtend2KeyPack(SignExtend2KeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+}
+
+inline void freeSignExtend2KeyPackPair(std::pair<SignExtend2KeyPack, SignExtend2KeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+inline void freeTripleKey(TripleKeyPack &key){
+    delete[] key.a;
+    delete[] key.b;
+    delete[] key.c;
+}
+
+inline void freeDPFKeyPack(DPFKeyPack &key){
+    if (!FSSConfig::dealer->keyBuf->isMem()) {
+        delete key.s;
+    }
+}
+
+inline void freeDPFKeyPackPair(std::pair<DPFKeyPack, DPFKeyPack> &keys){
+    delete[] keys.first.s;
+    delete[] keys.second.s;
+}
+
+inline void freeDPFKeyPack(DPFETKeyPack &key){
+    if (!FSSConfig::dealer->keyBuf->isMem()) {
+        delete key.s;
+    }
+}
+
+inline void freeDPFKeyPackPair(std::pair<DPFETKeyPack, DPFETKeyPack> &keys){
+    delete[] keys.first.s;
+    delete[] keys.second.s;
+}
+
+// freeGTDCFKeyPack==============================================================
+inline void freeGTDCFKeyPack(GTDCFKeyPack &key) {
+    if (key.scw) { delete[] key.scw; key.scw = nullptr; }
+    if (key.tcw) { delete[] key.tcw; key.tcw = nullptr; }
+    if (key.vcw) { delete[] key.vcw; key.vcw = nullptr; }
+    if (key.leaf_vcw) { delete[] key.leaf_vcw; key.leaf_vcw = nullptr; }
+}
+
+inline void freeGTDCFKeyPackPair(std::pair<GTDCFKeyPack, GTDCFKeyPack> &keys) {
+    freeGTDCFKeyPack(keys.first);
+    freeGTDCFKeyPack(keys.second);
+}
+
+inline void freeLUTKeyPack(LUTKeyPack &key){
+    freeDPFKeyPack(key.dpfKey);
+}
+
+inline void freeLUTKeyPackPair(std::pair<LUTKeyPack, LUTKeyPack> &keys){
+    delete[] keys.first.dpfKey.s;
+    delete[] keys.second.dpfKey.s;
+}
+
+inline void freeClipKeyPack(ClipKeyPack &key)
+{
+    freeDCFKeyPack(key.cmpKey.dcfKey);
+}
+
+inline void freeClipKeyPackPair(std::pair<ClipKeyPack, ClipKeyPack> &keys)
+{
+    delete[] keys.first.cmpKey.dcfKey.k;
+    delete[] keys.second.cmpKey.dcfKey.k;
+    delete[] keys.first.cmpKey.dcfKey.g;
+    delete[] keys.first.cmpKey.dcfKey.v;
+}
+
+inline void freeF2BF16KeyPack(F2BF16KeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+}
+
+inline void freeF2BF16KeyPackPair(std::pair<F2BF16KeyPack, F2BF16KeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+inline void freeTruncateReduceKeyPack(TruncateReduceKeyPack &key)
+{
+    freeDCFKeyPack(key.dcfKey);
+}
+
+inline void freeTruncateReduceKeyPackPair(std::pair<TruncateReduceKeyPack, TruncateReduceKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+inline void freeSlothDreluKeyPack(SlothDreluKeyPack &key){
+    freeDPFKeyPack(key.dpfKey);
+}
+
+inline void freeSlothDreluKeyPackPair(std::pair<SlothDreluKeyPack, SlothDreluKeyPack> &keys){
+    delete[] keys.first.dpfKey.s;
+    delete[] keys.second.dpfKey.s;
+}
+
+inline void freeLUTDPFETKeyPack(LUTDPFETKeyPack &key){
+    freeDPFKeyPack(key.dpfKey);
+}
+
+inline void freeLUTDPFETKeyPackPair(std::pair<LUTDPFETKeyPack, LUTDPFETKeyPack> &keys){
+    delete[] keys.first.dpfKey.s;
+    delete[] keys.second.dpfKey.s;
+}
+
+inline void freeWrapDPFKeyPack(WrapDPFKeyPack &key){
+    freeDPFKeyPack(key.dpfKey);
+}
+
+inline void freeWrapDPFKeyPackPair(std::pair<WrapDPFKeyPack, WrapDPFKeyPack> &keys){
+    delete[] keys.first.dpfKey.s;
+    delete[] keys.second.dpfKey.s;
+}
+
+// ==== 请添加到 freekey.h 的末尾 ====
+inline void freeQuadDPFKeyPack(QuadDPFKeyPack &key){
+    if (!FSSConfig::dealer->keyBuf->isMem()) {
+        delete[] key.scw;
+        delete[] key.tcw;
+    }
+}
+
+inline void freeQuadDPFKeyPackPair(std::pair<QuadDPFKeyPack, QuadDPFKeyPack> &keys){
+    delete[] keys.first.scw;
+    delete[] keys.second.scw;
+    delete[] keys.first.tcw;
+    delete[] keys.second.tcw;
+}
+
+inline void freeOctDPFKeyPack(OctDPFKeyPack &key){
+    if (!FSSConfig::dealer->keyBuf->isMem()) {
+        delete[] key.scw;
+        delete[] key.tcw;
+    }
+}
+
+inline void freeOctDPFKeyPackPair(std::pair<OctDPFKeyPack, OctDPFKeyPack> &keys){
+    delete[] keys.first.scw;
+    delete[] keys.second.scw;
+    delete[] keys.first.tcw;
+    delete[] keys.second.tcw;
+}
+
+// 可验证DPF——VDPF
+inline void freeVerDPFKeyPack(VerDPFKeyPack &key)
+{
+    delete[] key.s;
+    key.s = nullptr;
+}
+
+inline void freeVerDPFKeyPackPair(std::pair<VerDPFKeyPack, VerDPFKeyPack> &keys)
+{
+    delete[] keys.first.s;
+    delete[] keys.second.s;
+    keys.first.s = nullptr;
+    keys.second.s = nullptr;
+}
+
+
+// ============================================================
+// Free IFSS_DPF keys
+// ============================================================
+
+inline void freeIFSS_DPFKeyPackPair(std::pair<IFSS_DPFKeyPack, IFSS_DPFKeyPack> &keys)
+{
+    delete[] keys.first.valKey.s;
+    delete[] keys.second.valKey.s;
+
+    delete[] keys.first.macKey.s;
+    delete[] keys.second.macKey.s;
+}
+
+// ============================================================
+// Free IFSS_DCF_TwoDCF keys
+// ============================================================
+
+inline void freeIFSS_DCF_TwoDCFKeyPackPair(std::pair<IFSS_DCF_TwoDCFKeyPack, IFSS_DCF_TwoDCFKeyPack> &keys)
+{
+    // value DCF pair
+    delete[] keys.first.valKey.k;
+    delete[] keys.second.valKey.k;
+    delete[] keys.first.valKey.g;
+    delete[] keys.first.valKey.v;
+
+    // MAC DCF pair
+    delete[] keys.first.macKey.k;
+    delete[] keys.second.macKey.k;
+    delete[] keys.first.macKey.g;
+    delete[] keys.first.macKey.v;
+}
+
+// ============================================================
+// Free IFSS_DCF vector-payload keys
+// ============================================================
+
+inline void freeIFSS_DCFKeyPackPair(std::pair<IFSS_DCFKeyPack, IFSS_DCFKeyPack> &keys)
+{
+    delete[] keys.first.dcfKey.k;
+    delete[] keys.second.dcfKey.k;
+    delete[] keys.first.dcfKey.g;
+    delete[] keys.first.dcfKey.v;
+}
+
+
+// ============================================================
+// Free DIF key pair
+// ============================================================
+
+inline void freeDIFKeyPackPair(std::pair<DIFKeyPack, DIFKeyPack> &keys)
+{
+    if (keys.first.hasUpperDcf)
+    {
+        delete[] keys.first.upperKey.k;
+        delete[] keys.second.upperKey.k;
+
+        delete[] keys.first.upperKey.g;
+        delete[] keys.first.upperKey.v;
+
+        keys.first.upperKey.k = nullptr;
+        keys.second.upperKey.k = nullptr;
+        keys.first.upperKey.g = nullptr;
+        keys.first.upperKey.v = nullptr;
+    }
+
+    if (keys.first.hasLowerDcf)
+    {
+        delete[] keys.first.lowerKey.k;
+        delete[] keys.second.lowerKey.k;
+
+        delete[] keys.first.lowerKey.g;
+        delete[] keys.first.lowerKey.v;
+
+        keys.first.lowerKey.k = nullptr;
+        keys.second.lowerKey.k = nullptr;
+        keys.first.lowerKey.g = nullptr;
+        keys.first.lowerKey.v = nullptr;
+    }
+}
+
