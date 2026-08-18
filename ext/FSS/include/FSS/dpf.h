@@ -16,6 +16,14 @@ std::pair<DPFETKeyPack, DPFETKeyPack> keyGenDPFET(int bin, GroupElement idx);
 std::pair<GroupElement, GroupElement> evalAll_reduce_et(int party, DPFETKeyPack &key, GroupElement rightShift, const std::vector<GroupElement> &tab);
 GroupElement evalDPFET_LT(int party, const DPFETKeyPack &key, GroupElement x);
 
+// Grotto prefix/segment parity helpers. These return XOR shares of the
+// corresponding predicate for the point encoded by key:
+//   prefix:  [alpha < endpoint]
+//   segment: [alpha in [start, end)) on the cyclic Z_(2^bin) domain.
+GroupElement evalDPFETPrefixParity(int party, const DPFETKeyPack &key, GroupElement endpoint);
+GroupElement evalDPFETSegmentParity(int party, const DPFETKeyPack &key,
+                                   GroupElement start, GroupElement end);
+
 // GTDPF接口
 std::pair<DPFETKeyPack, DPFETKeyPack> keyGenGTDPF(int bin, GroupElement idx);
 GroupElement evalGTDPF(int party, const DPFETKeyPack &key, GroupElement x);

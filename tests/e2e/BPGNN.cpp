@@ -23,7 +23,16 @@ int main(int argc, char** argv) {
 
     int party = atoi(argv[1]);
     std::string ip = "127.0.0.1";
-    if(argc > 2) ip = argv[2];
+    bool useGrottoReLU = false;
+    for (int argi = 2; argi < argc; ++argi) {
+        std::string arg = argv[argi];
+        if (arg == "--relu=grotto")
+            useGrottoReLU = true;
+        else if (arg == "--relu=gtdcf")
+            useGrottoReLU = false;
+        else
+            ip = arg;
+    }
 
     using FSSVersion = FSSTransformer<u64>;
     FSSVersion *FSS = new FSSVersion();
@@ -172,7 +181,12 @@ int main(int argc, char** argv) {
         // 3) ReLU
         auto t3_start = std::chrono::high_resolution_clock::now();
         uint64_t c3_s = get_online_comm();
-        GTDCFReLU(totalNodes * hidDim, H1_post, H1_post, H1_post_mask, H1_post_mask, 8, "L1_ReLU");
+        if (useGrottoReLU)
+            GrottoReLU(totalNodes * hidDim, H1_post, H1_post,
+                       H1_post_mask, H1_post_mask, "L1_ReLU::");
+        else
+            GTDCFReLU(totalNodes * hidDim, H1_post, H1_post,
+                      H1_post_mask, H1_post_mask, 8, "L1_ReLU");
         auto t3_end = std::chrono::high_resolution_clock::now();
         uint64_t c3_e = get_online_comm();
 
@@ -256,7 +270,8 @@ int main(int argc, char** argv) {
             std::cout << "  0) 离线拓扑预处理 (Offline Topology Prep) : " << offline_prep_time << " ms \t| " << offline_prep_comm << " MB" << std::endl;
             std::cout << "  1) 第一层降维     (L1 Feature Trans)      : " << l1_trans_time << " ms \t| " << l1_trans_comm << " MB" << std::endl;
             std::cout << "  2) 第一层消息传递 (L1 Graph Route)        : " << d2 << " ms \t| " << m2 << " MB" << std::endl;
-            std::cout << "  3) GTDCFReLU激活 (L1 GTDCFReLU)         : " << d3 << " ms \t| " << m3 << " MB" << std::endl;
+            std::cout << "  3) " << (useGrottoReLU ? "GrottoReLU激活 (L1 GrottoReLU)" : "GTDCFReLU激活 (L1 GTDCFReLU)")
+                      << "         : " << d3 << " ms \t| " << m3 << " MB" << std::endl;
             std::cout << "  4) 第二层降维     (L2 Feature Trans)      : " << d4 << " ms \t| " << m4 << " MB" << std::endl;
             std::cout << "  5) 第二层消息传递 (L2 Graph Route)        : " << d5 << " ms \t| " << m5 << " MB" << std::endl;
             std::cout << "  6) BPGCN Softmax  (Output Softmax)        : " << d6 << " ms \t| " << m6 << " MB" << std::endl;

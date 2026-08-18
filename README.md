@@ -82,6 +82,35 @@ Our reported experiments were conducted in a simulated LAN environment with:
 
 ## Running an Experiment
 
+The dealer (party 1) must finish first because it generates `server.dat` and
+`client.dat`. After that, parties 2 and 3 run concurrently. For a local run,
+the repository provides a helper that performs this sequence automatically:
+
+```bash
+./run-local.sh
+```
+
+The default uses the existing GTDCF ReLU. To run the Grotto
+DPF/prefix-parity ReLU backend locally, use:
+
+```bash
+./run-local.sh --relu=grotto
+```
+
+The equivalent manual commands are:
+
+```bash
+./BPGNN 1 --relu=grotto
+./BPGNN 2 --relu=grotto
+./BPGNN 3 127.0.0.1 --relu=grotto
+```
+
+Protocol details, validation coverage, and adaptations required by this
+repository's masked-value interface are documented in
+[`docs/GROTTO_RELU.md`](docs/GROTTO_RELU.md).
+
+The commands below show the equivalent manual sequence.
+
 To run an experiment, start three separate processes corresponding to:
 
 * the **client**,

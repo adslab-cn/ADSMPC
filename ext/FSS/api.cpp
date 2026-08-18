@@ -20,6 +20,7 @@
 #include "fixtobfloat16.h"
 #include "wrap.h"
 #include <FSS/dpf.h>
+#include <FSS/grotto.h>
 #include "taylor.h"
 #include "float.h"
 
@@ -28,6 +29,7 @@
 #include <assert.h>
 #include <chrono>
 #include <thread>
+#include <vector>
 #include <Eigen/Dense>
 #include <bitpack/bitpack.h>
 
@@ -4970,6 +4972,132 @@ void PiranhaSoftmax(int32_t s1, int32_t s2, MASK_PAIR(GroupElement *inArr), MASK
     std::cerr << ">> Softmax - end" << std::endl;
 
     delete[] expandedDenominator;
+}
+
+// Grotto ReLU: the dealer generates and distributes preprocessing keys;
+// SERVER and CLIENT independently evaluate their shares and communicate only
+// through reconstruct().  The lower-level DPF and arithmetic-share operations
+// live in grotto.cpp; this function owns the complete three-party protocol.
+void GrottoReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                GroupElement *inArr_mask, GroupElement *outArr_mask,
+                std::string prefix)
+{
+    const int bin = bitlength;
+    const int chunkSize = 100000;
+    always_assert(size >= 0);
+    always_assert(bin >= 8 && bin <= 64);
+    std::cerr << ">> " << prefix << "Grotto-ReLU - Start" << std::endl;
+
+    uint64_t totalKeyReadTime = 0;
+    uint64_t totalComputeTime = 0;
+    uint64_t totalReconstructTime = 0;
+    uint64_t totalKeySize = 0;
+    uint64_t onlineCommStart = 0;
+    if (party != DEALER)
+        onlineCommStart = peer->bytesReceived() + peer->bytesSent();
+
+    for (int offset = 0; offset < size; offset += chunkSize) {
+        const int currentSize = std::min(chunkSize, size - offset);
+        if (party == DEALER) {
+            auto *keys = new std::pair<GrottoReLUKeyPack,
+                                      GrottoReLUKeyPack>[currentSize];
+#pragma omp parallel for
+            for (int i = 0; i < currentSize; ++i) {
+                const int globalIndex = offset + i;
+                GroupElement outputMask = random_ge(bin);
+                keys[i] = keyGenGrottoReLU(bin, inArr_mask[globalIndex],
+                                           outputMask);
+                outArr_mask[globalIndex] = outputMask;
+            }
+            for (int i = 0; i < currentSize; ++i) {
+                server->send_grotto_relu_key(keys[i].first);
+                client->send_grotto_relu_key(keys[i].second);
+                freeGrottoReLUKeyPair(keys[i]);
+            }
+            delete[] keys;
+            continue;
+        }
+
+        const int evaluatorParty = party - SERVER;
+        auto *keys = new GrottoReLUKeyPack[currentSize];
+        const uint64_t keySizeStart = dealer->bytesReceived();
+        totalKeyReadTime += time_this_block([&]() {
+            for (int i = 0; i < currentSize; ++i)
+                keys[i] = dealer->recv_grotto_relu_key(bin);
+        });
+        totalKeySize += dealer->bytesReceived() - keySizeStart;
+
+        // Both evaluators have consumed the same chunk of dealer material
+        // before beginning its online phase.
+        peer->sync();
+
+        std::vector<GroupElement> delta(currentSize);
+        totalComputeTime += time_this_block([&]() {
+#pragma omp parallel for
+            for (int i = 0; i < currentSize; ++i) {
+                const int globalIndex = offset + i;
+                delta[i] = evaluatorParty * inArr[globalIndex]
+                         - keys[i].shiftedMaskShare;
+                mod(delta[i], bin);
+            }
+        });
+        totalReconstructTime += time_this_block([&]() {
+            reconstruct(currentSize, delta.data(), bin);
+        });
+        std::vector<GroupElement> opened(3 * currentSize);
+        totalComputeTime += time_this_block([&]() {
+#pragma omp parallel for
+            for (int i = 0; i < currentSize; ++i) {
+                const int globalIndex = offset + i;
+                auto shares = evalGrottoReLULocalShares(
+                    evaluatorParty, keys[i], inArr[globalIndex], delta[i]);
+                opened[i] = shares.correctionSign + keys[i].productKey.a;
+                opened[currentSize + i] = shares.slope + keys[i].productKey.b;
+                opened[2 * currentSize + i] = shares.input + keys[i].productKey.c;
+                mod(opened[i], bin);
+                mod(opened[currentSize + i], bin);
+                mod(opened[2 * currentSize + i], bin);
+            }
+        });
+        totalReconstructTime += time_this_block([&]() {
+            reconstruct(3 * currentSize, opened.data(), bin);
+        });
+
+        totalComputeTime += time_this_block([&]() {
+#pragma omp parallel for
+            for (int i = 0; i < currentSize; ++i) {
+                const int globalIndex = offset + i;
+                outArr[globalIndex] = TernaryMultEval(
+                    evaluatorParty, keys[i].productKey, opened[i],
+                    opened[currentSize + i], opened[2 * currentSize + i], bin)
+                    + keys[i].routShare;
+                mod(outArr[globalIndex], bin);
+            }
+        });
+        totalReconstructTime += time_this_block([&]() {
+            reconstruct(currentSize, outArr + offset, bin);
+        });
+
+        const bool ownsDPFStorage = !dealer->keyBuf->isMem();
+        for (int i = 0; i < currentSize; ++i)
+            freeGrottoReLUKey(keys[i], ownsDPFStorage);
+        delete[] keys;
+    }
+
+    if (party != DEALER) {
+        const uint64_t onlineCommEnd = peer->bytesReceived() + peer->bytesSent();
+        FSS::stat_t stat = {
+            prefix + "Grotto-ReLU",
+            totalKeyReadTime,
+            totalComputeTime,
+            totalReconstructTime,
+            onlineCommEnd - onlineCommStart,
+            totalKeySize
+        };
+        stat.print();
+        FSS::push_stats(stat);
+    }
+    std::cerr << ">> " << prefix << "Grotto-ReLU - End" << std::endl;
 }
 
 // GTDCFReLU目前最新设计版本

@@ -43,6 +43,9 @@ void ArgMax(int32_t s1, int32_t s2, MASK_PAIR(GroupElement *inArr), MASK_PAIR(Gr
 
 void Relu(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), GroupElement *drelu, std::string prefix = "");
 
+void GrottoReLU(int32_t size, MASK_PAIR(GroupElement *inArr),
+                MASK_PAIR(GroupElement *outArr), std::string prefix = "");
+
 void ReluTruncate(int32_t size, MASK_PAIR(GroupElement *inArr), MASK_PAIR(GroupElement *outArr), int sf, GroupElement *drelu_cache);
 
 void MaxPool(int32_t N, int32_t H, int32_t W, int32_t C, int32_t ksizeH,

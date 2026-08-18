@@ -24,6 +24,7 @@ add_library(${PROJECT_NAME}
     pubcmp.cpp
     clip.cpp
     dpf.cpp
+    grotto.cpp
     lut.cpp
     select.cpp
     fixtobfloat16.cpp

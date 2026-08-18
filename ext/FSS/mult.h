@@ -47,5 +47,10 @@ std::pair<MultKey, MultKey> MultGen(GroupElement rin1, GroupElement rin2, GroupE
 GroupElement MultEval(int party, const MultKey &k, const GroupElement &l, const GroupElement &r);
 GroupElement mult_helper(uint8_t party, GroupElement x, GroupElement y, GroupElement x_mask, GroupElement y_mask);
 
+std::pair<TernaryMultKey, TernaryMultKey> TernaryMultGen(int bitlength);
+GroupElement TernaryMultEval(int party, const TernaryMultKey &key,
+                             GroupElement openedA, GroupElement openedB,
+                             GroupElement openedC, int bitlength);
+
 std::pair<SquareKey, SquareKey> keyGenSquare(GroupElement rin, GroupElement rout);
 GroupElement evalSquare(int party, GroupElement x, const SquareKey &k);

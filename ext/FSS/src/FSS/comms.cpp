@@ -493,6 +493,26 @@ void Peer::send_dpfet_keypack(const DPFETKeyPack &kp)
     send_ge(42, 64);
 }
 
+void Peer::send_grotto_relu_key(const GrottoReLUKeyPack &kp)
+{
+    send_dpfet_keypack(kp.dpfKey);
+    send_ge(kp.iShare, kp.dpfKey.bin);
+    send_ge(kp.shiftedMaskShare, kp.dpfKey.bin);
+    send_ternary_mult_key(kp.productKey, kp.dpfKey.bin);
+    send_ge(kp.routShare, kp.dpfKey.bin);
+}
+
+void Peer::send_ternary_mult_key(const TernaryMultKey &k, int bw)
+{
+    send_ge(k.a, bw);
+    send_ge(k.b, bw);
+    send_ge(k.c, bw);
+    send_ge(k.ab, bw);
+    send_ge(k.ac, bw);
+    send_ge(k.bc, bw);
+    send_ge(k.abc, bw);
+}
+
 void Peer::send_ddcf_keypack(const DualDCFKeyPack &kp)
 {
     send_dcf_keypack(kp.dcfKey);
@@ -990,6 +1010,30 @@ DPFETKeyPack Dealer::recv_dpfet_keypack(int bin)
     GroupElement t = recv_ge(64);
     always_assert(t == 42);
     return kp;
+}
+
+GrottoReLUKeyPack Dealer::recv_grotto_relu_key(int bin)
+{
+    GrottoReLUKeyPack kp;
+    kp.dpfKey = recv_dpfet_keypack(bin);
+    kp.iShare = recv_ge(bin);
+    kp.shiftedMaskShare = recv_ge(bin);
+    kp.productKey = recv_ternary_mult_key(bin);
+    kp.routShare = recv_ge(bin);
+    return kp;
+}
+
+TernaryMultKey Dealer::recv_ternary_mult_key(int bw)
+{
+    TernaryMultKey k{};
+    k.a = recv_ge(bw);
+    k.b = recv_ge(bw);
+    k.c = recv_ge(bw);
+    k.ab = recv_ge(bw);
+    k.ac = recv_ge(bw);
+    k.bc = recv_ge(bw);
+    k.abc = recv_ge(bw);
+    return k;
 }
 
 DualDCFKeyPack Dealer::recv_ddcf_keypack(int Bin, int Bout, int groupSize)
@@ -1789,4 +1833,3 @@ GTDCFKeyPack Dealer::recv_GTDCF_key(int bin, int w, int groupSize) {
     kp.rout_share = recv_ge(bin);
     return kp;
 }
-

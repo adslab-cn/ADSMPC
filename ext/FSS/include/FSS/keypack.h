@@ -37,6 +37,19 @@ struct MultKey{
     GroupElement a, b, c;
 };
 
+// Correlated randomness for multiplying three additively shared values in one
+// opening round.  The masks a, b, c and all their non-trivial products are
+// themselves additively shared between the two evaluators.
+struct TernaryMultKey {
+    GroupElement a;
+    GroupElement b;
+    GroupElement c;
+    GroupElement ab;
+    GroupElement ac;
+    GroupElement bc;
+    GroupElement abc;
+};
+
 struct MatMulKey{
     int Bin, Bout;
     int s1, s2, s3;
@@ -323,6 +336,18 @@ public:
     }
 };
 
+// ReLU-specific Grotto preprocessing.  The DPF share encodes the dealer's
+// random point i.  iShare and shiftedMaskShare let the online parties open
+// x-i while retaining additive shares of x.  productKey contains the generic
+// correlated randomness for the one-round ternary product u*a*x.
+struct GrottoReLUKeyPack {
+    DPFETKeyPack dpfKey;
+    GroupElement iShare;
+    GroupElement shiftedMaskShare;
+    TernaryMultKey productKey;
+    GroupElement routShare;
+};
+
 // =========================================================================
 // GTDCF KeyPack
 // =========================================================================
@@ -433,5 +458,3 @@ struct SlothSignExtendKeyPack {
     GroupElement rout;
     GroupElement select;
 };
-
-

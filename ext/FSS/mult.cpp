@@ -92,6 +92,52 @@ GroupElement mult_helper(uint8_t party, GroupElement x, GroupElement y, GroupEle
     }
 }
 
+std::pair<TernaryMultKey, TernaryMultKey> TernaryMultGen(int bitlength)
+{
+    const GroupElement a = random_ge(bitlength);
+    const GroupElement b = random_ge(bitlength);
+    const GroupElement c = random_ge(bitlength);
+
+    const GroupElement ab = a * b;
+    const GroupElement ac = a * c;
+    const GroupElement bc = b * c;
+    const GroupElement abc = a * b * c;
+
+    TernaryMultKey k0{};
+    TernaryMultKey k1{};
+    auto assign = [bitlength](GroupElement value, GroupElement &share0,
+                              GroupElement &share1) {
+        auto shares = splitShare(value, bitlength);
+        share0 = shares.first;
+        share1 = shares.second;
+    };
+
+    assign(a, k0.a, k1.a);
+    assign(b, k0.b, k1.b);
+    assign(c, k0.c, k1.c);
+    assign(ab, k0.ab, k1.ab);
+    assign(ac, k0.ac, k1.ac);
+    assign(bc, k0.bc, k1.bc);
+    assign(abc, k0.abc, k1.abc);
+    return {k0, k1};
+}
+
+GroupElement TernaryMultEval(int party, const TernaryMultKey &key,
+                             GroupElement openedA, GroupElement openedB,
+                             GroupElement openedC, int bitlength)
+{
+    GroupElement share = party * openedA * openedB * openedC
+                       - openedA * openedB * key.c
+                       - openedA * openedC * key.b
+                       - openedB * openedC * key.a
+                       + openedA * key.bc
+                       + openedB * key.ac
+                       + openedC * key.ab
+                       - key.abc;
+    mod(share, bitlength);
+    return share;
+}
+
 std::pair<SquareKey, SquareKey> keyGenSquare(GroupElement rin, GroupElement rout)
 {
     SquareKey k1, k2;

@@ -457,6 +457,38 @@ GroupElement evalDPFET_LT(int party, const DPFETKeyPack &key, GroupElement x)
     return t_dcf;
 }
 
+GroupElement evalDPFETPrefixParity(int party, const DPFETKeyPack &key,
+                                  GroupElement endpoint)
+{
+    mod(endpoint, key.bin);
+    if (endpoint == 0)
+        return 0;
+
+    // evalDPFET_LT reconstructs [query < alpha].  Complementing the query
+    // at endpoint - 1 gives [alpha < endpoint].  Flip exactly one XOR share
+    // to represent the public complement.
+    GroupElement share = evalDPFET_LT(party, key, endpoint - 1);
+    return share ^ (party == 0 ? 1 : 0);
+}
+
+GroupElement evalDPFETSegmentParity(int party, const DPFETKeyPack &key,
+                                   GroupElement start, GroupElement end)
+{
+    mod(start, key.bin);
+    mod(end, key.bin);
+    if (start == end)
+        return 0;
+
+    GroupElement startShare = evalDPFETPrefixParity(party, key, start);
+    GroupElement endShare = evalDPFETPrefixParity(party, key, end);
+    GroupElement share = startShare ^ endShare;
+    // Prefix XOR selects the non-wrapping interval between the endpoints.
+    // For a cyclic interval crossing zero, take its public complement.
+    if (start > end)
+        share ^= (party == 0 ? 1 : 0);
+    return share;
+}
+
 void evalAll_reduce_helper_et(int party, DPFETKeyPack &key, GroupElement rightShift, const std::vector<GroupElement> &tab, GroupElement &out, GroupElement &corr, block &s_prev, u8 t_prev, int i, GroupElement acc)
 {
     if (i == key.bin - 7)

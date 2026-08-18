@@ -2,9 +2,13 @@
 
 namespace bitpack {
     
-    inline uint64_t mod(uint64_t x, int bw)
+    uint64_t mod(uint64_t x, int bw)
     {
-        return x & ((1LL << bw) - 1);
+        if (bw >= 64)
+            return x;
+        if (bw <= 0)
+            return 0;
+        return x & ((uint64_t{1} << bw) - 1);
     }
 
     std::size_t packed_size(std::size_t n, int bw)

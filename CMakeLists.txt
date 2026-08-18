@@ -62,6 +62,12 @@ add_executable(
 )
 target_link_libraries(GTDCF-ReLU ${PROJECT_NAME})
 
+add_executable(
+    Grotto-ReLU
+    tests/bench/Grotto-ReLU.cpp
+)
+target_link_libraries(Grotto-ReLU ${PROJECT_NAME})
+
 
 # === E2E ===
 add_executable(

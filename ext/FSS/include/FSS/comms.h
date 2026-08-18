@@ -209,6 +209,8 @@ public:
 
     void send_mult_key(const MultKey &k);
 
+    void send_ternary_mult_key(const TernaryMultKey &k, int bw);
+
     void send_square_key(const SquareKey &k);
 
     void send_matmul_key(const MatMulKey &k);
@@ -224,6 +226,8 @@ public:
     void send_dpf_keypack(const DPFKeyPack &kp);
 
     void send_dpfet_keypack(const DPFETKeyPack &kp);
+
+    void send_grotto_relu_key(const GrottoReLUKeyPack &kp);
 
     // 发送 GTDCF 密钥 
     void send_GTDCF_key(const GTDCFKeyPack &kp);
@@ -340,6 +344,8 @@ public:
 
     MultKey recv_mult_key();
 
+    TernaryMultKey recv_ternary_mult_key(int bw);
+
     SquareKey recv_square_key();
 
     osuCrypto::block recv_block();
@@ -359,6 +365,8 @@ public:
     DPFKeyPack recv_dpf_keypack(int bin, int bout);
 
     DPFETKeyPack recv_dpfet_keypack(int bin);
+
+    GrottoReLUKeyPack recv_grotto_relu_key(int bin);
 
     // 接收 GTDCF 密钥
     GTDCFKeyPack recv_GTDCF_key(int bin, int w, int groupSize);
