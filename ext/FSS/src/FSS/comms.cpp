@@ -73,7 +73,13 @@ void SocketBuf::sync()
 
 void SocketBuf::read(char *buf, int bytes)
 {
-    always_assert(bytes == recv(recvsocket, (char *)buf, bytes, MSG_WAITALL));
+    int done = 0;
+    while (done < bytes)
+    {
+        const ssize_t got = recv(recvsocket, buf + done, bytes - done, 0);
+        always_assert(got > 0);
+        done += static_cast<int>(got);
+    }
     bytesReceived += bytes;
 }
 
@@ -87,7 +93,13 @@ char *SocketBuf::read(int bytes)
 
 void SocketBuf::write(char *buf, int bytes)
 {
-    always_assert(bytes == send(sendsocket, buf, bytes, 0));
+    int done = 0;
+    while (done < bytes)
+    {
+        const ssize_t sent = send(sendsocket, buf + done, bytes - done, 0);
+        always_assert(sent > 0);
+        done += static_cast<int>(sent);
+    }
     bytesSent += bytes;
 }
 

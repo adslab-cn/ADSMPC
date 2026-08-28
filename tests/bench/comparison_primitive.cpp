@@ -1,8 +1,18 @@
 // Table 4: Comparison cost of comparison primitives
 #include <FSS/dcf.h>
 #include <FSS/dpf.h>
+#include <FSS/freekey.h>
+#include <FSS/prng.h>
+#include <FSS/assert.h>
 #include <iostream>
-#include <backend/FSS_base.h>
+#include <algorithm>
+#include <chrono>
+#include <iomanip>
+#include <random>
+#include <string>
+#include <vector>
+
+using osuCrypto::u64;
 
 void DPF_TEST()
 {
@@ -399,9 +409,195 @@ void GTDCF_TEST()
 }
 
 
-int main(){
-    // DPF_TEST();
-    DPFET_TEST();
-    DCF_TEST();
-    GTDCF_TEST();
+namespace table_bench {
+using Clock = std::chrono::steady_clock;
+constexpr double kWanBandwidthBps = 400.0e6;
+constexpr double kWanOneWayLatencyMs = 60.0;
+constexpr int kB2ARounds = 1;
+
+struct Result {
+    std::string method;
+    std::string output;
+    int ell = 0;
+    std::size_t batch = 0;
+    double core_ms = 0.0;
+    double b2a_ms = 0.0;
+    double wan_ms = 0.0;
+    std::size_t online_bits = 0;
+};
+
+static GroupElement inputMask(int ell) {
+    return ell == 64 ? ~GroupElement(0) : ((GroupElement(1) << ell) - 1);
+}
+
+static void initPrng(std::uint64_t seed) {
+    for (int i = 0; i < 256; ++i)
+        FSSConfig::prngs[i].SetSeed(osuCrypto::toBlock(seed, 0xdeadbeefbadc0ffeULL + i));
+}
+
+static Result benchDCF(int ell, std::size_t B, std::size_t chunk, std::uint64_t seed) {
+    initPrng(seed); Result out{"DCF", "Arithmetic", ell, B};
+    std::mt19937_64 rng(seed); GroupElement mask = inputMask(ell);
+    for (std::size_t done = 0; done < B; done += chunk) {
+        std::size_t n = std::min(chunk, B - done);
+        std::vector<std::pair<DCFKeyPack, DCFKeyPack>> keys(n);
+        std::vector<GroupElement> x(n), alpha(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            alpha[i] = rng() & mask; x[i] = rng() & mask;
+            keys[i] = keyGenDCF(ell, ell, alpha[i], 1);
+        }
+        auto t0 = Clock::now();
+        for (std::size_t i = 0; i < n; ++i) {
+            GroupElement y0 = 0, y1 = 0;
+            evalDCF(0, &y0, x[i], keys[i].first);
+            evalDCF(1, &y1, x[i], keys[i].second);
+            always_assert(y0 + y1 == (x[i] < alpha[i] ? 1 : 0));
+        }
+        auto t1 = Clock::now();
+        out.core_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        for (auto &key : keys) freeDCFKeyPackPair(key);
+    }
+    out.wan_ms = out.core_ms;
+    return out;
+}
+
+static Result benchGrottoB2A(int ell, std::size_t B, std::size_t chunk, std::uint64_t seed) {
+    initPrng(seed); Result out{"GROTTO+B2A", "Boolean + B2A", ell, B};
+    std::mt19937_64 rng(seed); GroupElement mask = inputMask(ell);
+    for (std::size_t done = 0; done < B; done += chunk) {
+        std::size_t n = std::min(chunk, B - done);
+        std::vector<std::pair<DPFETKeyPack, DPFETKeyPack>> keys(n);
+        std::vector<GroupElement> x(n), alpha(n);
+        std::vector<std::uint8_t> bit0(n), bit1(n), r0(n), r1(n);
+        std::vector<GroupElement> ar0(n), ar1(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            alpha[i] = rng() & mask; x[i] = rng() & mask;
+            keys[i] = keyGenDPFET(ell, alpha[i]);
+            std::uint8_t r = rng() & 1; r0[i] = rng() & 1; r1[i] = r0[i] ^ r;
+            ar0[i] = rng(); ar1[i] = GroupElement(r) - ar0[i];
+        }
+        auto g0 = Clock::now();
+        for (std::size_t i = 0; i < n; ++i) {
+            bit0[i] = evalDPFET_LT(0, keys[i].first, x[i]) & 1;
+            bit1[i] = evalDPFET_LT(1, keys[i].second, x[i]) & 1;
+            always_assert((bit0[i] ^ bit1[i]) == (x[i] < alpha[i] ? 1 : 0));
+        }
+        auto g1 = Clock::now();
+        auto b0 = Clock::now();
+        for (std::size_t i = 0; i < n; ++i) {
+            std::uint8_t c = (bit0[i] ^ r0[i]) ^ (bit1[i] ^ r1[i]);
+            GroupElement y0 = ar0[i], y1 = ar1[i];
+            if (c) { y0 = -y0; y1 = GroupElement(1) - y1; }
+            always_assert(y0 + y1 == GroupElement(bit0[i] ^ bit1[i]));
+        }
+        auto b1 = Clock::now();
+        out.core_ms += std::chrono::duration<double, std::milli>(g1 - g0).count();
+        out.b2a_ms += std::chrono::duration<double, std::milli>(b1 - b0).count();
+        for (auto &key : keys) freeDPFKeyPackPair(key);
+    }
+    out.online_bits = 2 * B;
+    double transmission_ms = 1000.0 * double(out.online_bits) / kWanBandwidthBps;
+    out.wan_ms = out.core_ms + out.b2a_ms + 2.0 * kWanOneWayLatencyMs * kB2ARounds + transmission_ms;
+    return out;
+}
+
+static Result benchGTDCF(int ell, std::size_t B, std::size_t chunk, std::uint64_t seed) {
+    initPrng(seed); Result out{"GTDCF", "Arithmetic", ell, B};
+    std::mt19937_64 rng(seed); GroupElement mask = inputMask(ell);
+    for (std::size_t done = 0; done < B; done += chunk) {
+        std::size_t n = std::min(chunk, B - done);
+        std::vector<std::pair<GTDCFKeyPack, GTDCFKeyPack>> keys(n);
+        std::vector<GroupElement> x(n), alpha(n);
+        const GroupElement beta[2] = {1, 0};
+        for (std::size_t i = 0; i < n; ++i) {
+            alpha[i] = rng() & mask; x[i] = rng() & mask;
+            keys[i] = keyGenGTDCF(ell, 8, 2, alpha[i], beta);
+        }
+        auto t0 = Clock::now();
+        for (std::size_t i = 0; i < n; ++i) {
+            GroupElement y0[2] = {0, 0}, y1[2] = {0, 0};
+            evalGTDCF(0, keys[i].first, x[i], y0);
+            evalGTDCF(1, keys[i].second, x[i], y1);
+            always_assert(y0[0] + y1[0] == (x[i] >= alpha[i] ? 1 : 0));
+        }
+        auto t1 = Clock::now();
+        out.core_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        for (auto &key : keys) freeGTDCFKeyPackPair(key);
+    }
+    out.wan_ms = out.core_ms;
+    return out;
+}
+
+template<class Fn>
+static Result medianOf(int repetitions, Fn fn) {
+    std::vector<Result> rows; rows.reserve(repetitions);
+    for (int i = 0; i < repetitions; ++i) rows.push_back(fn(i));
+    auto median = [&](auto field) {
+        std::vector<double> v; for (const auto &r : rows) v.push_back(field(r));
+        std::sort(v.begin(), v.end()); return v[v.size() / 2];
+    };
+    Result out = rows.front();
+    out.core_ms = median([](const Result&r){return r.core_ms;});
+    out.b2a_ms = median([](const Result&r){return r.b2a_ms;});
+    out.wan_ms = median([](const Result&r){return r.wan_ms;});
+    return out;
+}
+
+static void printLatex(const std::vector<Result>& rows) {
+    auto find = [&](const std::string&m, int ell, std::size_t B) -> double {
+        for (const auto&r:rows) if(r.method==m&&r.ell==ell&&r.batch==B) return r.wan_ms;
+        throw std::runtime_error("missing table result");
+    };
+    std::cout << std::fixed << std::setprecision(3) << R"LATEX(
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Comparison cost of comparison primitives in WAN.}
+\label{tab:GTDCF_l_compare}
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{6pt}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{lccccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}} & \multirow{2}{*}{\textbf{Output Share}} & \multirow{2}{*}{\textbf{$\ell$}} & \multicolumn{3}{c}{\textbf{WAN Evaluation Time (ms)}} \\
+\cmidrule(lr){4-6}
+& & & \textbf{$B=10^3$} & \textbf{$B=10^4$} & \textbf{$B=10^5$} \\
+\midrule
+)LATEX";
+    auto block = [&](const std::string& label,const std::string& output,const std::string& method,bool bold) {
+        std::cout << "\\multirow{2}{*}{" << (bold?"\\textbf{":"") << label << (bold?"}":"") << "}\n"
+                  << "& \\multirow{2}{*}{" << output << "}\n"
+                  << "& 32 & " << find(method,32,1000) << " & " << find(method,32,10000) << " & " << find(method,32,100000) << " \\\\\n"
+                  << "&& 64 & " << find(method,64,1000) << " & " << find(method,64,10000) << " & " << find(method,64,100000) << " \\\\\n";
+    };
+    block("DCF~\\cite{boyle_function_2021}","Arithmetic","DCF",false); std::cout << "\\midrule\n";
+    block("GROTTO~\\cite{storrier_grotto_2023,gupta_sigma_2024}","Boolean + B2A","GROTTO+B2A",false); std::cout << "\\midrule\n";
+    block("GTDCF","Arithmetic","GTDCF",true);
+    std::cout << R"LATEX(\bottomrule
+\end{tabular}
+}
+\vspace{2pt}
+\begin{minipage}{\columnwidth}
+\scriptsize\textit{Note: For a fair comparison with the arithmetic-share outputs, the reported GROTTO evaluation time includes its B2A conversion cost.}
+\end{minipage}
+\end{table}
+)LATEX";
+}
+}
+
+int main(int argc, char** argv) {
+    std::size_t chunk = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 1000;
+    int repetitions = argc > 2 ? std::atoi(argv[2]) : 3;
+    std::size_t maxB = argc > 3 ? std::strtoull(argv[3], nullptr, 10) : 100000;
+    if (!chunk || repetitions <= 0 || !(repetitions & 1)) throw std::invalid_argument("chunk must be positive and repetitions must be odd");
+    std::vector<table_bench::Result> rows;
+    for (int ell : {32,64}) for (std::size_t B : {std::size_t(1000),std::size_t(10000),std::size_t(100000)}) if (B <= maxB) {
+        auto seed = std::uint64_t(ell) << 48 ^ B;
+        rows.push_back(table_bench::medianOf(repetitions,[&](int r){return table_bench::benchDCF(ell,B,chunk,seed+r);}));
+        rows.push_back(table_bench::medianOf(repetitions,[&](int r){return table_bench::benchGrottoB2A(ell,B,chunk,seed+100+r);}));
+        rows.push_back(table_bench::medianOf(repetitions,[&](int r){return table_bench::benchGTDCF(ell,B,chunk,seed+200+r);}));
+    }
+    std::cout << "Method,Output,ell,B,CoreEval(ms),B2A(ms),B2A-Rounds,B2A-Bits,WAN-Eval(ms)\n";
+    for (const auto&r:rows) std::cout << r.method << ',' << r.output << ',' << r.ell << ',' << r.batch << ',' << std::fixed << std::setprecision(3) << r.core_ms << ',' << r.b2a_ms << ',' << (r.method=="GROTTO+B2A"?table_bench::kB2ARounds:0) << ',' << r.online_bits << ',' << r.wan_ms << '\n';
+    if (maxB >= 100000) table_bench::printLatex(rows);
 }

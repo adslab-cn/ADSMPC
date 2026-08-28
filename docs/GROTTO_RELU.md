@@ -59,7 +59,7 @@ wire-format reproductions of the authors' implementation:
   `query < alpha`. The new helpers explicitly convert that convention to
   half-open prefix and cyclic-segment parity. The underlying AES expansion,
   correction words, 128-bit leaves, and DPF keys are reused unchanged.
-- The high-level protocol is chunked at 100,000 elements to bound evaluator
+- The high-level protocol is chunked at 10,000 elements to bound evaluator
   key memory. Each chunk independently performs the three online
   reconstructions, so inputs larger than one chunk use three rounds per chunk.
 

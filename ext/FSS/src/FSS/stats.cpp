@@ -95,10 +95,14 @@ namespace FSS
     void dump_stats_csv(const std::string &filename)
     {
         std::ofstream out(filename);
-        out << "Protocol,Online Time (ms),Communication (MB), Key Size (GB)" << std::endl;
+        out << "Protocol,Key Read Time (ms),Pure Online Time (ms),Total Time (ms),Communication (MB),Key Size (GB)" << std::endl;
         for (auto &stat : stats)
         {
-            out << stat.second.name << "," << (stat.second.compute_time + stat.second.reconstruct_time) / 1000.0 << "," << stat.second.comm_bytes / (1024.0 * 1024.0) << "," << stat.second.keysize_bytes / (1024.0 * 1024.0 * 1024.0) << std::endl;
+            const double key_ms = stat.second.keyread_time / 1000.0;
+            const double online_ms = (stat.second.compute_time + stat.second.reconstruct_time) / 1000.0;
+            out << stat.second.name << "," << key_ms << "," << online_ms << ","
+                << key_ms + online_ms << "," << stat.second.comm_bytes / (1024.0 * 1024.0)
+                << "," << stat.second.keysize_bytes / (1024.0 * 1024.0 * 1024.0) << std::endl;
         }
         out.close();
     }

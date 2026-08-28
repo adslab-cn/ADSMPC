@@ -1,6 +1,7 @@
 #pragma once
 
 #include <FSS/group_element.h>
+#include <FSS/graphiti.h>
 
 #define MASK_PAIR(x) x, x##_mask
 
@@ -163,6 +164,21 @@ void reconstruct(int32_t size, GroupElement *arr, int bw);
 // GTDCF-based ReLU API
 // ==========================================
 void GTDCFReLU(int32_t size, GroupElement *inArr, GroupElement *outArr, GroupElement *inArr_mask, GroupElement *outArr_mask, int suffix_w = 8, std::string prefix = "");
+void GTDCFClamp(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                GroupElement *inArr_mask, GroupElement *outArr_mask,
+                GroupElement limit_fixed, int suffix_w = 8,
+                std::string prefix = "");
+
+// ReLU comparison adapters for the 2-compute-party + 1-Dealer benchmark.
+void OblivGNNReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                  GroupElement *inArr_mask, GroupElement *outArr_mask,
+                  int effective_bw = 64, std::string prefix = "OblivGNN::");
+void CrypTenReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                 GroupElement *inArr_mask, GroupElement *outArr_mask,
+                 int effective_bw = 64, std::string prefix = "CrypTen::");
+void SIGMAReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+               GroupElement *inArr_mask, GroupElement *outArr_mask,
+               int effective_bw = 64, std::string prefix = "SIGMA::");
 
 
 // ==========================================
@@ -172,6 +188,17 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
                   GroupElement *inArr, GroupElement *outArr, 
                   GroupElement *inArr_mask, GroupElement *outArr_mask, 
                   int32_t scale, std::string prefix = "");
+
+// Softmax baselines used by the 2+1 comparison benchmark.
+void SIGMASoftmax(int32_t rows, int32_t cols,
+                  MASK_PAIR(GroupElement *in), MASK_PAIR(GroupElement *out),
+                  int32_t scale, std::string prefix = "Sigma::");
+void BumbleBeeSoftmax(int32_t rows, int32_t cols,
+                      MASK_PAIR(GroupElement *in), MASK_PAIR(GroupElement *out),
+                      int32_t scale, std::string prefix = "BumbleBee::");
+void CrypTenSoftmax(int32_t rows, int32_t cols,
+                    MASK_PAIR(GroupElement *in), MASK_PAIR(GroupElement *out),
+                    int32_t scale, std::string prefix = "CrypTen::");
 
 
 // ==========================================
@@ -197,6 +224,16 @@ void BPMPL_GraphRouting(int numBaseNodes, int numBaseEdges,
            MASK_PAIR(GroupElement *F_out),
            int *ghostIndices_mask,
            std::string prefix = "");
+
+void BPMPLGraphitiRouting(const GraphitiGraph &base_graph,
+                          const GraphitiGraph &delta_graph,
+                          int num_delta_vertices, int num_ghost_vertices,
+                          int dim,
+                          MASK_PAIR(GroupElement *H),
+                          MASK_PAIR(GroupElement *degree_inv),
+                          MASK_PAIR(GroupElement *out),
+                          const int *ghost_to_base,
+                          std::string prefix = "");
 
 
 

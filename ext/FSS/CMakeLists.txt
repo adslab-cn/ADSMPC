@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(FSS)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-write-strings -Wno-unused-result -maes -Wno-ignored-attributes -march=native -Wno-deprecated-declarations -fopenmp")
 find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(Threads REQUIRED)
@@ -34,6 +36,9 @@ add_library(${PROJECT_NAME}
     mic.cpp
     msnzb.cpp
     truncate.cpp
+    graphiti.cpp
+    cryptgnn.cpp
+    dual_fss_auth.cpp
 )
 
 target_link_libraries (${PROJECT_NAME} Eigen3::Eigen Threads::Threads cryptoTools bitpack)

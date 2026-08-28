@@ -25,6 +25,7 @@
 #include "float.h"
 
 #include <cassert>
+#include <cmath>
 #include <iostream>
 #include <assert.h>
 #include <chrono>
@@ -63,6 +64,12 @@ auto time_comm_this_block(Functor f)
 void FSS::start()
 {
     FSS::stats.clear();
+    numRounds = 0;
+    evalMicroseconds = reconstructMicroseconds = arsEvalMicroseconds = 0;
+    convEvalMicroseconds = reluEvalMicroseconds = avgpoolEvalMicroseconds = 0;
+    pubdivEvalMicroseconds = argmaxEvalMicroseconds = multEvalMicroseconds = 0;
+    selectEvalMicroseconds = 0;
+    convOnlineComm = selectOnlineComm = arsOnlineComm = reluOnlineComm = 0;
     // std::cerr << "=== COMPUTATION START ===\n\n";
     if (party != DEALER)
         peer->sync();
@@ -132,12 +139,13 @@ void FSS::end()
         std::cerr << "Input Online Communication = " << (inputOnlineComm) << " B\n";
         std::cerr << "Secfloat Online Communication = " << (secFloatComm) /*/ (1024.0 * 1024.0)*/ << " B\n";
 
-        std::cerr << "Online Time = " << (evalMicroseconds + accumulatedInputTimeOnline + agg_time) / 1000.0 << " milliseconds\n";
+        auto endTime = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        uint64_t total_wall_us = (endTime - startTime) / 1000;
+        uint64_t pure_online_us = total_wall_us >= keyread_time ? total_wall_us - keyread_time : 0;
+        std::cerr << "Pure Online Time (excluding Key Read) = " << pure_online_us / 1000.0 << " milliseconds\n";
         std::cerr << "Key Read Time = " << keyread_time / 1000.0 << " milliseconds\n";
         std::cerr << "Total Eigen Time = " << eigenMicroseconds / 1000.0 << " milliseconds\n";
-        auto endTime = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        std::cerr << "Key Read Time = " << keyread_time / 1000.0 << " milliseconds\n";
-        std::cerr << "Total Time (including Key Read) = " << (endTime - startTime) / 1000000.0 << " milliseconds\n";
+        std::cerr << "Total Time (including Key Read) = " << total_wall_us / 1000.0 << " milliseconds\n";
 
         std::cerr << "packTime = " << packTime / 1000.0 << " miliseconds\n";
         std::cerr << "sendTime = " << sendTime / 1000.0 << " miliseconds\n";
@@ -183,6 +191,8 @@ inline void unpack_wrapper(GroupElement *dst, const GroupElement *src, std::size
 
 void packed_reconstruct(int32_t size, GroupElement *arr, int bw)
 {
+    if (size <= 0)
+        return;
     auto psize = bitpack::packed_size(size, bw);
     GroupElement *packedArr = new GroupElement[psize];
     GroupElement *packedTmp = new GroupElement[psize];
@@ -224,6 +234,11 @@ void packed_reconstruct(int32_t size, GroupElement *arr, int bw)
 
 void reconstruct(int32_t size, GroupElement *arr, int bw)
 {
+    // A zero-length reconstruction carries no value and must not enter the
+    // socket/OpenMP path. Besides being unnecessary, it can desynchronize the
+    // following protocol when one branch has no ghost or delta entries.
+    if (size <= 0)
+        return;
     if (doPack)
     {
         return packed_reconstruct(size, arr, bw);
@@ -4983,7 +4998,7 @@ void GrottoReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
                 std::string prefix)
 {
     const int bin = bitlength;
-    const int chunkSize = 100000;
+    const int chunkSize = 10000;
     always_assert(size >= 0);
     always_assert(bin >= 8 && bin <= 64);
     std::cerr << ">> " << prefix << "Grotto-ReLU - Start" << std::endl;
@@ -5106,7 +5121,8 @@ void GTDCFReLU(int32_t size, GroupElement *inArr, GroupElement *outArr, GroupEle
     std::cerr << ">> " << prefix << "GTDCF-ReLU (w=" << suffix_w << ") - Start" << std::endl;
     int bin = FSSConfig::bitlength;
     // 【核心优化】：分块大小，每次处理 10 万个元素。可根据电脑内存自行调大或调小
-    int CHUNK_SIZE = 100000; 
+    // Bound GTDCF key memory. A 100k-key batch can require hundreds of MB.
+    int CHUNK_SIZE = 10000;
     
     uint64_t total_keyread_time = 0;
     uint64_t total_eval_time = 0;
@@ -5190,7 +5206,142 @@ if (party == DEALER) {
 
 
 }
+    if (party != DEALER) {
+        FSS::stat_t stat = {prefix + "GTDCF-ReLU", total_keyread_time,
+                            total_eval_time, total_recons_time, total_comm,
+                            total_keysize};
+        stat.print();
+        FSS::push_stats(stat);
+    }
     std::cerr << ">> " << prefix << "GTDCF-ReLU - End" << std::endl;
+}
+
+// Secure clamp(x,-L,L) = ReLU(x+L) - ReLU(x-L) - L.  Both GTDCF
+// evaluations are prepared/evaluated together and their masked outputs are
+// reconstructed in one batched round per chunk.
+void GTDCFClamp(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                GroupElement *inArr_mask, GroupElement *outArr_mask,
+                GroupElement limit_fixed, int suffix_w, std::string prefix) {
+    constexpr int CHUNK_SIZE = 65536;
+    const int bin = FSSConfig::bitlength;
+    uint64_t keyread_time = 0, eval_time = 0, reconstruct_time = 0;
+    uint64_t comm_bytes = 0, keysize_bytes = 0;
+
+    std::cerr << ">> " << prefix << "GTDCF-Clamp (batched) - Start" << std::endl;
+    for (int offset = 0; offset < size; offset += CHUNK_SIZE) {
+        const int count = std::min(CHUNK_SIZE, size - offset);
+        const int batch = 2 * count;
+        if (party == DEALER) {
+            auto *keys = new std::pair<GTDCFKeyPack, GTDCFKeyPack>[batch];
+            auto *masks = make_array<GroupElement>(batch);
+            #pragma omp parallel for
+            for (int k = 0; k < batch; ++k) {
+                const int i = k % count;
+                const GroupElement rin = inArr_mask[offset + i];
+                const GroupElement rout = random_ge(bin);
+                masks[k] = rout;
+                GroupElement beta[2] = {GroupElement(1), -rin};
+                mod(beta[1], bin);
+                keys[k] = keyGenGTDCF(bin, suffix_w, 2, rin, beta);
+                auto shares = splitShare(rout, bin);
+                keys[k].first.rout_share = shares.first;
+                keys[k].second.rout_share = shares.second;
+            }
+            for (int k = 0; k < batch; ++k) {
+                server->send_GTDCF_key(keys[k].first);
+                client->send_GTDCF_key(keys[k].second);
+                freeGTDCFKeyPackPair(keys[k]);
+            }
+            #pragma omp parallel for
+            for (int i = 0; i < count; ++i)
+                outArr_mask[offset + i] = masks[i] - masks[count + i];
+            delete[] masks;
+            delete[] keys;
+        } else {
+            auto *keys = new GTDCFKeyPack[batch];
+            auto *tmp = make_array<GroupElement>(batch);
+            const uint64_t keysize_start = dealer->bytesReceived();
+            keyread_time += time_this_block([&]() {
+                for (int k = 0; k < batch; ++k)
+                    keys[k] = dealer->recv_GTDCF_key(bin, suffix_w, 2);
+            });
+            keysize_bytes += dealer->bytesReceived() - keysize_start;
+            peer->sync();
+            eval_time += time_this_block([&]() {
+                #pragma omp parallel for
+                for (int k = 0; k < batch; ++k) {
+                    const int i = k % count;
+                    GroupElement shifted = inArr[offset + i];
+                    shifted += (k < count ? limit_fixed : -limit_fixed);
+                    GroupElement res[2];
+                    evalGTDCF(party - SERVER, keys[k], shifted, res);
+                    tmp[k] = shifted * res[0] + res[1] + keys[k].rout_share;
+                    mod(tmp[k], bin);
+                    freeGTDCFKeyPack(keys[k]);
+                }
+            });
+            auto rec = time_comm_this_block([&]() { reconstruct(batch, tmp, bin); });
+            reconstruct_time += rec.first;
+            comm_bytes += rec.second;
+            #pragma omp parallel for
+            for (int i = 0; i < count; ++i)
+                outArr[offset + i] = tmp[i] - tmp[count + i] - limit_fixed;
+            delete[] tmp;
+            delete[] keys;
+        }
+    }
+    if (party != DEALER)
+        FSS::push_stats({prefix + "GTDCF-Clamp", keyread_time, eval_time,
+                         reconstruct_time, comm_bytes, keysize_bytes});
+    std::cerr << ">> " << prefix << "GTDCF-Clamp - End" << std::endl;
+}
+
+void OblivGNNReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                  GroupElement *inArr_mask, GroupElement *outArr_mask,
+                  int effective_bw, std::string prefix) {
+    std::cerr << ">> " << prefix << "ReLU (DPF.Comp + multiply, 2 rounds) - Start" << std::endl;
+    constexpr int chunk_size = 10000;
+    for (int offset = 0; offset < size; offset += chunk_size) {
+        const int count = std::min(chunk_size, size - offset);
+        Relu2Round(count, inArr + offset, inArr_mask + offset,
+                   outArr + offset, outArr_mask + offset, nullptr, effective_bw);
+    }
+    std::cerr << ">> " << prefix << "ReLU - End" << std::endl;
+}
+
+void CrypTenReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+                 GroupElement *inArr_mask, GroupElement *outArr_mask,
+                 int effective_bw, std::string prefix) {
+    std::cerr << ">> " << prefix << "ReLU (CrypTen 9-round schedule adapter) - Start" << std::endl;
+    // Relu2Round supplies the secure comparison-and-selection core available in
+    // this C++ runtime. Seven explicit barriers reproduce CrypTen's nine-round
+    // online schedule for latency experiments. This adapter is intentionally
+    // documented as a schedule-level port, not the Python CrypTen bit protocol.
+    constexpr int chunk_size = 10000;
+    for (int offset = 0; offset < size; offset += chunk_size) {
+        const int count = std::min(chunk_size, size - offset);
+        Relu2Round(count, inArr + offset, inArr_mask + offset,
+                   outArr + offset, outArr_mask + offset, nullptr, effective_bw);
+    }
+    if (party != DEALER) {
+        for (int round = 2; round < 9; ++round) peer->sync();
+    }
+    std::cerr << ">> " << prefix << "ReLU - End" << std::endl;
+}
+
+void SIGMAReLU(int32_t size, GroupElement *inArr, GroupElement *outArr,
+               GroupElement *inArr_mask, GroupElement *outArr_mask,
+               int effective_bw, std::string prefix) {
+    std::cerr << ">> " << prefix << "ReLU (SlothRelu) - Start" << std::endl;
+    constexpr int chunk_size = 10000;
+    for (int offset = 0; offset < size; offset += chunk_size) {
+        const int count = std::min(chunk_size, size - offset);
+        GroupElement *active_in = (party == DEALER) ? inArr_mask + offset : inArr + offset;
+        GroupElement *active_out = (party == DEALER) ? outArr_mask + offset : outArr + offset;
+        SlothRelu(count, effective_bw, active_in, active_out,
+                  prefix + "Chunk" + std::to_string(offset / chunk_size) + "::");
+    }
+    std::cerr << ">> " << prefix << "ReLU - End" << std::endl;
 }
 
 
@@ -5206,6 +5357,7 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
 {
     std::cerr << ">> BPGCNSoftmax (Range [-10, 10]) - Start" << std::endl;
     int size = s1 * s2;
+    GroupElement *active_out = (party == DEALER) ? outArr_mask : outArr;
     GroupElement limit_fixed = (1ULL << scale) * 10; // 10.0 in fixed-point
 
     // Allocate distinct memory buffers to avoid aliasing bugs
@@ -5221,32 +5373,16 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
     // Logic: x_clamped = ReLU(x + 10) - ReLU(x - 10) - 10
     // ---------------------------------------------------------
     
-    // 1. Calc ReLU(x + 10)
-    #pragma omp parallel for
-    for(int i = 0; i < size; ++i) {
-        t_buf[i] = inArr[i] + (party != DEALER ? limit_fixed : 0);
-    }
-    SlothRelu(size, FSSConfig::bitlength, t_buf, r1, prefix + "Clamp1_");
-
-    // 2. Calc ReLU(x - 10)
-    #pragma omp parallel for
-    for(int i = 0; i < size; ++i) {
-        t_buf[i] = inArr[i] - (party != DEALER ? limit_fixed : 0);
-    }
-    SlothRelu(size, FSSConfig::bitlength, t_buf, r2, prefix + "Clamp2_");
-
-    // 3. Combine to get x_clamped in [-10, 10]
-    #pragma omp parallel for
-    for(int i = 0; i < size; ++i) {
-        x_clamped[i] = r1[i] - r2[i] - (party != DEALER ? limit_fixed : 0);
-    }
+    GTDCFClamp(size, inArr, x_clamped, inArr_mask, x_clamped,
+               limit_fixed, 8, prefix + "Clamp_");
 
     // ---------------------------------------------------------
-    // Step 2: Scale Down (x / 32)
+    // Step 2: Scale Down (x / 8)
     // ---------------------------------------------------------
-    int k_scaling = 5;
+    // Fast mode: one polynomial square + three restoration squares.
+    int k_scaling = 3;
     GroupElement *x_scaled = t_buf; // Reuse t_buf
-    SlothARS(size, x_clamped, x_scaled, k_scaling, prefix + "ScaleDown_");
+    EdabitsPrTrunc(size, x_clamped, x_scaled, k_scaling, prefix + "ScaleDown_");
 
     // ---------------------------------------------------------
     // Step 3: Polynomial Approximation (1 + x + 0.5x^2)
@@ -5256,11 +5392,11 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
     
     // x^2
     ElemWiseMul(size, x_scaled, x_scaled, x2, prefix + "PolySq_");
-    SlothARS(size, x2, x2, scale, prefix + "PolySq_TR_");
+    EdabitsPrTrunc(size, x2, x2, scale, prefix + "PolySq_TR_");
 
     // 0.5 * x^2
     GroupElement *term2 = r2; // Reuse r2
-    SlothARS(size, x2, term2, 1, prefix + "PolyHalf_");
+    EdabitsPrTrunc(size, x2, term2, 1, prefix + "PolyHalf_");
 
     GroupElement c0 = (1ULL << scale);
     #pragma omp parallel for
@@ -5273,7 +5409,8 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
     // ---------------------------------------------------------
     for (int step = 0; step < k_scaling; ++step) {
         ElemWiseMul(size, y_approx, y_approx, y_approx, prefix + "RestSq_" + std::to_string(step) + "_");
-        SlothARS(size, y_approx, y_approx, scale, prefix + "RestTR_" + std::to_string(step) + "_");
+        EdabitsPrTrunc(size, y_approx, y_approx, scale,
+                       prefix + "RestTR_" + std::to_string(step) + "_");
     }
 
     // ---------------------------------------------------------
@@ -5293,9 +5430,10 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
     // ---------------------------------------------------------
     GroupElement *inv_sums = make_array<GroupElement>(s1);
     
-    // Use a slightly higher scale (scale + 4 = 16) for inverse precision
-    int inv_scale = scale + 4; 
-    InverseLUT(s1, sums, inv_sums, inv_scale, 32, prefix + "Inv_");
+    // InverseLUT assumes that its input and output use the same fixed-point
+    // scale. sums is Q(scale), so the reciprocal must remain Q(scale).
+    // scale+10 supports up to 1024 classes without shifting small sums to zero.
+    InverseLUT(s1, sums, inv_sums, scale, scale + 10, prefix + "Inv_");
 
     GroupElement *expanded_inv = t_buf; // Reuse t_buf
     #pragma omp parallel for
@@ -5305,19 +5443,9 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
         }
     }
 
-    // Result Scale: 12 (y) + 16 (inv) = 28
-    ElemWiseMul(size, y_approx, expanded_inv, outArr, prefix + "NormMult_");
-    
-    // Truncate by 16 to get back to Scale 12
-    SlothARS(size, outArr, outArr, inv_scale, prefix + "NormTR_");
-
-    // Dealer sync for safety
-    if (party == DEALER && outArr_mask != nullptr) {
-        #pragma omp parallel for
-        for(int i = 0; i < size; ++i) {
-            outArr_mask[i] = outArr[i];
-        }
-    }
+    // Result scale is 2*scale; truncate by scale to return to Q(scale).
+    ElemWiseMul(size, y_approx, expanded_inv, active_out, prefix + "NormMult_");
+    EdabitsPrTrunc(size, active_out, active_out, scale, prefix + "NormTR_");
 
     delete[] t_buf; 
     delete[] r1; 
@@ -5328,12 +5456,109 @@ void BPGCNSoftmax(int32_t s1, int32_t s2,
 
     auto t_end = std::chrono::high_resolution_clock::now();
     if (party != DEALER) {
-        auto time_taken = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
+        uint64_t time_taken = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count();
         FSS::stat_t stat = {prefix + "BPGCNSoftmax_Total", 0, time_taken, 0, 0, 0};
         FSS::push_stats(stat);
     }
     
     std::cerr << ">> BPGCNSoftmax - End" << std::endl;
+}
+
+void SIGMASoftmax(int32_t rows, int32_t cols,
+                  GroupElement *in, GroupElement *in_mask,
+                  GroupElement *out, GroupElement *out_mask,
+                  int32_t scale, std::string prefix) {
+    GroupElement *active_in = (party == DEALER) ? in_mask : in;
+    GroupElement *active_out = (party == DEALER) ? out_mask : out;
+    std::cerr << ">> " << prefix << "Softmax - Start" << std::endl;
+    Softmax(rows, cols, FSSConfig::bitlength, active_in, active_out, scale);
+    std::cerr << ">> " << prefix << "Softmax - End" << std::endl;
+}
+
+// Shared implementation of the negative-domain limit approximation
+//   exp(x) ~= (1 + x/2^n)^(2^n), x in [lower, 0].
+// BumbleBee uses n=6 and a clipping branch. CrypTen uses the same classical
+// limit approximation with a larger iteration count.
+static void LimitApproxSoftmax(int32_t rows, int32_t cols,
+                               GroupElement *in, GroupElement *in_mask,
+                               GroupElement *out, GroupElement *out_mask,
+                               int32_t scale, int iterations, int lower,
+                               const std::string &prefix) {
+    const int size = rows * cols;
+    GroupElement *x = (party == DEALER) ? in_mask : in;
+    GroupElement *y = (party == DEALER) ? out_mask : out;
+    auto *row_max = make_array<GroupElement>(rows);
+    auto *z = make_array<GroupElement>(size);
+    auto *tmp = make_array<GroupElement>(size);
+    auto *clipped = make_array<GroupElement>(size);
+
+    SlothMaxpool(rows, cols, FSSConfig::bitlength, x, row_max, prefix + "Max_");
+    #pragma omp parallel for
+    for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j)
+            z[i * cols + j] = x[i * cols + j] - row_max[i];
+
+    // max(z, lower) = ReLU(z-lower)+lower. Constants are added only to
+    // reconstructed masked values, never to Dealer masks.
+    const GroupElement lower_fixed = GroupElement(-int64_t(lower)) << scale;
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i)
+        tmp[i] = z[i] + (party == DEALER ? 0 : lower_fixed);
+    SlothRelu(size, FSSConfig::bitlength, tmp, clipped, prefix + "Clip_");
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i)
+        clipped[i] -= (party == DEALER ? 0 : lower_fixed);
+
+    SlothARS(size, clipped, tmp, iterations, prefix + "ExpScale_");
+    const GroupElement one = GroupElement(1) << scale;
+    #pragma omp parallel for
+    for (int i = 0; i < size; ++i)
+        y[i] = tmp[i] + (party == DEALER ? 0 : one);
+    for (int r = 0; r < iterations; ++r) {
+        ElemWiseMul(size, y, y, y, prefix + "ExpSq" + std::to_string(r) + "_");
+        SlothARS(size, y, y, scale, prefix + "ExpTR" + std::to_string(r) + "_");
+    }
+
+    auto *sums = make_array<GroupElement>(rows);
+    #pragma omp parallel for
+    for (int i = 0; i < rows; ++i) {
+        sums[i] = 0;
+        for (int j = 0; j < cols; ++j) sums[i] += y[i * cols + j];
+    }
+    auto *inv = make_array<GroupElement>(rows);
+    // sums and the reciprocal both use Q(scale). Passing bw=scale+10 keeps
+    // denominators for up to 1024 classes inside the 16-bit LUT domain.
+    InverseLUT(rows, sums, inv, scale, scale + 10, prefix + "Reciprocal_");
+    auto *expanded = make_array<GroupElement>(size);
+    #pragma omp parallel for
+    for (int i = 0; i < rows; ++i)
+        for (int j = 0; j < cols; ++j)
+            expanded[i * cols + j] = inv[i];
+    ElemWiseMul(size, y, expanded, y, prefix + "Normalize_");
+    SlothARS(size, y, y, scale, prefix + "NormalizeTR_");
+
+    delete[] row_max; delete[] z; delete[] tmp; delete[] clipped;
+    delete[] sums; delete[] inv; delete[] expanded;
+}
+
+void BumbleBeeSoftmax(int32_t rows, int32_t cols,
+                      GroupElement *in, GroupElement *in_mask,
+                      GroupElement *out, GroupElement *out_mask,
+                      int32_t scale, std::string prefix) {
+    std::cerr << ">> " << prefix << "Softmax (n=6, lower=-14) - Start" << std::endl;
+    LimitApproxSoftmax(rows, cols, in, in_mask, out, out_mask,
+                       scale, 6, -14, prefix);
+    std::cerr << ">> " << prefix << "Softmax - End" << std::endl;
+}
+
+void CrypTenSoftmax(int32_t rows, int32_t cols,
+                    GroupElement *in, GroupElement *in_mask,
+                    GroupElement *out, GroupElement *out_mask,
+                    int32_t scale, std::string prefix) {
+    std::cerr << ">> " << prefix << "Softmax (limit exp, n=8) - Start" << std::endl;
+    LimitApproxSoftmax(rows, cols, in, in_mask, out, out_mask,
+                       scale, 8, -16, prefix);
+    std::cerr << ">> " << prefix << "Softmax - End" << std::endl;
 }
 
 // ==============================================================================
@@ -5768,6 +5993,122 @@ void BPMPL_GraphRouting(int numBaseNodes, int numBaseEdges,
 
     // 全局清理
     delete[] S_base; delete[] H_ghost; delete[] H_delta; delete[] S_delta;
+}
+
+void BPMPLGraphitiRouting(const GraphitiGraph &base_graph,
+                          const GraphitiGraph &delta_graph,
+                          int num_delta_vertices, int num_ghost_vertices,
+                          int dim,
+                          GroupElement *H, GroupElement *H_mask,
+                          GroupElement *degree_inv, GroupElement *degree_inv_mask,
+                          GroupElement *out, GroupElement *out_mask,
+                          const int *ghost_to_base,
+                          std::string prefix) {
+    base_graph.validate();
+    delta_graph.validate();
+    always_assert(delta_graph.num_vertices == num_delta_vertices + num_ghost_vertices);
+    always_assert(dim > 0);
+    const int num_base = base_graph.num_vertices;
+    const int total_real = num_base + num_delta_vertices;
+    int index_bits = 1;
+    while ((uint64_t(1) << index_bits) < static_cast<uint64_t>(std::max(1, num_base))) ++index_bits;
+
+    GroupElement *active_h = (party == DEALER) ? H_mask : H;
+    GroupElement *active_degree = (party == DEALER) ? degree_inv_mask : degree_inv;
+    GroupElement *active_out = (party == DEALER) ? out_mask : out;
+    auto *base_agg = new GroupElement[static_cast<size_t>(num_base) * dim];
+    auto *delta_payload = new GroupElement[static_cast<size_t>(delta_graph.num_vertices) * dim];
+    auto *delta_agg = new GroupElement[static_cast<size_t>(delta_graph.num_vertices) * dim];
+    auto *ghost_masked = new GroupElement[static_cast<size_t>(num_ghost_vertices) * dim];
+
+    GraphitiGCNAggregate(base_graph, dim, active_h, base_agg, prefix + "Base");
+    std::cerr << "   [BPMPL] " << prefix << "base path finished" << std::endl;
+    std::copy(active_h + static_cast<size_t>(num_base) * dim,
+              active_h + static_cast<size_t>(total_real) * dim,
+              delta_payload);
+
+    if (party == DEALER) {
+        auto *ghost_masks = new GroupElement[static_cast<size_t>(num_ghost_vertices) * dim];
+        for (int q = 0; q < num_ghost_vertices; ++q) {
+            always_assert(ghost_to_base[q] >= 0 && ghost_to_base[q] < num_base);
+            auto keys = keyGenDPF(index_bits, FSSConfig::bitlength,
+                                  ghost_to_base[q], GroupElement(1));
+            server->send_dpf_keypack(keys.first);
+            client->send_dpf_keypack(keys.second);
+            freeDPFKeyPackPair(keys);
+            for (int j = 0; j < dim; ++j) {
+                const GroupElement rg = random_ge(FSSConfig::bitlength);
+                ghost_masks[q * dim + j] = rg;
+                GroupElement correction = rg - active_h[ghost_to_base[q] * dim + j];
+                mod(correction, FSSConfig::bitlength);
+                auto shares = splitShare(correction, FSSConfig::bitlength);
+                server->send_ge(shares.first, FSSConfig::bitlength);
+                client->send_ge(shares.second, FSSConfig::bitlength);
+            }
+        }
+        std::copy(ghost_masks, ghost_masks + static_cast<size_t>(num_ghost_vertices) * dim,
+                  delta_payload + static_cast<size_t>(num_delta_vertices) * dim);
+        delete[] ghost_masks;
+    } else if (num_ghost_vertices > 0) {
+        const int fss_party = party - SERVER;
+        for (int q = 0; q < num_ghost_vertices; ++q) {
+            DPFKeyPack key = dealer->recv_dpf_keypack(index_bits, FSSConfig::bitlength);
+            std::vector<GroupElement> selector(num_base);
+            for (int i = 0; i < num_base; ++i)
+                selector[i] = evalDPF_EQ(fss_party, key, GroupElement(i));
+            for (int j = 0; j < dim; ++j) {
+                GroupElement share = dealer->recv_ge(FSSConfig::bitlength);
+                for (int i = 0; i < num_base; ++i) {
+                    share += selector[i] * active_h[i * dim + j];
+                }
+                mod(share, FSSConfig::bitlength);
+                ghost_masked[q * dim + j] = share;
+            }
+            freeDPFKeyPack(key);
+        }
+        // Reconstruction reveals only h_ghost + fresh Dealer mask.
+        std::cerr << "   [BPMPL] " << prefix << "ghost reconstruction start, size="
+                  << num_ghost_vertices * dim << std::endl;
+        reconstruct(num_ghost_vertices * dim, ghost_masked, FSSConfig::bitlength);
+        std::cerr << "   [BPMPL] " << prefix << "ghost reconstruction finished" << std::endl;
+        std::copy(ghost_masked, ghost_masked + static_cast<size_t>(num_ghost_vertices) * dim,
+                  delta_payload + static_cast<size_t>(num_delta_vertices) * dim);
+    }
+
+    if (delta_graph.num_vertices > 0) {
+        GraphitiGCNAggregate(delta_graph, dim, delta_payload, delta_agg, prefix + "Delta+");
+    }
+    auto *fused = new GroupElement[static_cast<size_t>(total_real) * dim];
+    std::copy(base_agg, base_agg + static_cast<size_t>(num_base) * dim, fused);
+    std::copy(delta_agg, delta_agg + static_cast<size_t>(num_delta_vertices) * dim,
+              fused + static_cast<size_t>(num_base) * dim);
+
+    // A ghost is a local alias of a base vertex. Contributions gathered at the
+    // alias are folded back into the corresponding base output.
+    for (int q = 0; q < num_ghost_vertices; ++q) {
+        const int base = ghost_to_base[q];
+        for (int j = 0; j < dim; ++j) {
+            fused[base * dim + j] += delta_agg[(num_delta_vertices + q) * dim + j];
+            mod(fused[base * dim + j], FSSConfig::bitlength);
+        }
+    }
+
+    auto *degree_broadcast = new GroupElement[static_cast<size_t>(total_real) * dim];
+    for (int i = 0; i < total_real; ++i)
+        for (int j = 0; j < dim; ++j)
+            degree_broadcast[i * dim + j] = active_degree[i];
+    std::cerr << "   [BPMPL] " << prefix << "normalization start, size="
+              << total_real * dim << std::endl;
+    ElemWiseMul(total_real * dim, fused, degree_broadcast, active_out,
+                prefix + "Normalize::");
+    std::cerr << "   [BPMPL] " << prefix << "normalization finished" << std::endl;
+
+    delete[] base_agg;
+    delete[] delta_payload;
+    delete[] delta_agg;
+    delete[] ghost_masked;
+    delete[] fused;
+    delete[] degree_broadcast;
 }
 
 

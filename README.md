@@ -59,6 +59,31 @@ All generated binaries, including test and experiment executables, will be place
 
 ## Reproducing Experimental Results
 
+The completed BPGNN path and its implementation/security scope are documented
+in [`BPGNN_IMPLEMENTATION.md`](BPGNN_IMPLEMENTATION.md). The end-to-end test now
+prints measured runtime, online communication, and Dealer preprocessing
+communication separately for every GCN stage. Dataset-specific executables
+`BPGNN_Cora`, `BPGNN_Citeseer`, and `BPGNN_Pubmed` each use one static round
+followed by five dynamic rounds and report their aggregate comparison. Splitting
+the experiments and streaming Dealer keys avoids loading the combined
+preprocessing files for all datasets into memory.
+
+The build also provides `softmax_comparison`, a 2+1 benchmark for BPGNN,
+the framework's SIGMA-compatible Softmax path, BumbleBee's clipped limit
+approximation, and a CrypTen-style limit-approximation baseline. Protocol
+mapping, accuracy metrics, and run commands are in `BPGNN_IMPLEMENTATION.md`.
+
+`relu_comparison` compares the OblivGNN, CrypTen schedule, GROTTO spline,
+SIGMA/SlothRelu, and BPGNN GTDCF ReLU paths on each dataset's `nodes x 64`
+hidden tensor.
+
+Benchmark timing is split into total wall time, preprocessing-key read time,
+and pure online time (`total - key read`) for the Softmax/ReLU comparisons and
+for every stage, round, and summary row of the end-to-end BPGNN experiments.
+The BPGNN Softmax clamp batches its two GTDCF threshold branches into one
+reconstruction, uses three exponent-restoration squares, and applies one-round
+probabilistic truncation to its scaling-and-squaring path.
+
 We provide executables corresponding to the key results reported in the paper.
 
 ### Local Two-Party Execution
