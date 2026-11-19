@@ -1,0 +1,20 @@
+target_sources(FSS PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/and.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/api.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/clip.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/conv.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtobfloat16.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/float.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lut.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mic.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/msnzb.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mult.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pubcmp.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/pubdiv.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/relu.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/select.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/signextend.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/taylor.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/truncate.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/wrap.cpp")
+add_subdirectory(util)

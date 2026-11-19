@@ -1,0 +1,4 @@
+target_sources(FSS PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/keypack.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/freekey.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/freekey.cpp")
